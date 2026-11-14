@@ -40,6 +40,7 @@ return function(runHub)
 	local otherShop = make("Frame", "ShopContainer", alternate)
 	local lock = make("Frame", "Locked", surface)
 	local upgradeA = make("Frame", "UpgradeA", shop)
+	make("StringValue", "Identifier", upgradeA)
 	local upgradeB = make("Frame", "UpgradeB", shop)
 	local upgradeC = make("Frame", "UpgradeC", otherShop)
 	local chartNode = make("Frame", "ChartNode", shop)
@@ -195,8 +196,26 @@ return function(runHub)
 			end,
 		},
 	}
+	local discoveryMode = "tables"
+	local nativeClosure = function() end
 	local environment = {
-		getgc = function()
+		getupvalues = function(value)
+			assert(value == nativeClosure)
+			return modules
+		end,
+		getreg = function()
+			return discoveryMode == "registry" and { cache = { loaded = modules } } or {}
+		end,
+		getgc = function(includeTables)
+			if discoveryMode == "none" then
+				return {}
+			end
+			if discoveryMode == "functions" then
+				assert(not includeTables, "getgc não aceita argumentos")
+				return { [7] = nativeClosure }
+			elseif discoveryMode == "registry" then
+				return {}
+			end
 			local objects = {
 				{ ImportantData = { Stats = { slotLoaded = false } } },
 				{ Fields = { main = { max = 0 } } },
@@ -239,6 +258,19 @@ return function(runHub)
 		api = runHub(environment)
 		check(api.Game.stats() == stats, "Estado nativo ativo tem preferência sobre cópia vazia")
 		check(moduleInitializations == 0, "Nenhum módulo reinicializado pelo hub")
+		local function containsNativeData()
+			for _, object in ipairs(api.Hub.nativeObjects()) do
+				if object == modules.Data then
+					return true
+				end
+			end
+			return false
+		end
+		discoveryMode = "functions"
+		check(containsNativeData(), "getgc sem tabelas usa upvalues e aceita lista esparsa")
+		discoveryMode = "registry"
+		check(containsNativeData(), "Cache nativo no registry sem getgc com tabelas")
+		discoveryMode = "tables"
 		local function hasButton(text)
 			for _, object in ipairs(api.Ui.root:GetDescendants()) do
 				if object:IsA("TextButton") and object.Text == text then
@@ -477,6 +509,26 @@ return function(runHub)
 		end
 		check(true, "Conexões encerradas")
 		check(moduleInitializations == 0, "Todas as ações usam módulos nativos sem listeners adicionais")
+		discoveryMode = "none"
+		local characterRoot = make("Part", "HumanoidRootPart", character)
+		characterRoot.Anchored = true
+		characterRoot.Position = Vector3.new(-14, -22, 30)
+		api = runHub(environment)
+		check(
+			api.Game.stats().compatibility and api.Game.currentWorld() == 1,
+			"Compatibilidade sem acesso ao estado interno"
+		)
+		check(api.Game.unlockedFields()[1].id == "main", "Compatibilidade reconhece campo inicial pela posição")
+		api.Game.revealMachines(1)
+		part.CFrame = CFrame.new(0, 200000, 0)
+		task.wait()
+		check(part.Position.Y < 100000, "Compatibilidade mantém máquina após ocultação do jogo")
+		check(api.Game.exposeUpgradeObjects(1) > 0, "Compatibilidade revela upgrade pelo Identifier real")
+		local compatibilityEvents = #events
+		api.Game.claimRewards()
+		check(#events == compatibilityEvents + 2, "Compatibilidade envia claims sem ler timer de outro módulo")
+		check(moduleInitializations == 0, "Compatibilidade não inicializa módulos")
+		api.Ui.root:Destroy()
 	end)
 	if api and api.Hub.alive then
 		api.Ui.root:Destroy()

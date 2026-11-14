@@ -65,7 +65,14 @@ de compras pelo servidor nem cria widgets ausentes do cliente.
 
 O botão de restaurar mapa foi removido. A limpeza ao fechar continua interna.
 O hub consulta tabelas já ativas por getgc, sem requerer módulos novamente no
-jogo publicado. Se o executor não expuser esses objetos, a ação informa a falha.
+jogo publicado. Também aceita tabelas de upvalues e caches do registry.
+Sem acesso a essas APIs, usa compatibilidade para mapa, widgets, farm e rewards.
+Nesse modo, o world é estimado pela posição em World 1/2; o farm confirma apenas
+o campo inicial e o campo ocupado. O cap de referência é 5000, não um cap lido do save.
+Claims são tentados a cada 10 segundos sem alegar que o timer está pronto.
+As máquinas são mantidas por eventos de CFrame, sem parar o script geral do jogo.
+Revelar widgets não altera prereqs internos nesse modo. Ações que precisam de
+GalaxyGen, Solarians ou outros módulos continuam indisponíveis sem acesso nativo.
 Para o controlador de mapa, hookfunction também cobre referências da função
 capturadas antes da execução do hub, quando disponível no executor.
 Daily e hourly usam o estado nativo, com checagem a cada segundo e cooldown de

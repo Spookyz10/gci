@@ -188,14 +188,96 @@ local moduleSignatures = {
 	Solarians = { "Bars", "HasLeveled" },
 }
 
+local fieldLocations = {
+	main = { 1, -14, -27, 30 },
+	anti = { 1, -16990, -27, 30 },
+	un = { 1, -27440, 370, 30 },
+	planet = { 1, -617, 5054, 3234 },
+	blue = { 1, -3654, 9464, -119848 },
+	jungle = { 2, 32935, -29, 24 },
+	cavern = { 2, 33668, -6, 747 },
+	intersection = { 2, 34454, -349, 26506 },
+	understand = { 2, 38225, -114, 15877 },
+	desert = { 2, 34627, -24, -1014 },
+	temple = { 2, 33468, 3573, 6746 },
+	cactus = { 2, 35057, -550, -1284 },
+	rift = { 2, 34443, 1029, 26142 },
+}
+
+function Hub.compatibilityModule(name)
+	if name == "TabManager" then
+		return { ShowHideTabs = function() end, menus = {}, compatibility = true }
+	end
+	if name == "Fields" then
+		local fields = {}
+		for id, location in pairs(fieldLocations) do
+			fields[id] = { world = location[1], max = 5000, counter = 0, objects = {}, compatibility = true }
+		end
+		return { Fields = fields }
+	end
+	if name == "Data" then
+		return { ImportantData = { Stats = { compatibility = true } } }
+	end
+end
+
+function Hub.nativeObjects()
+	local objects, seen = {}, {}
+	local function add(value)
+		if type(value) == "table" and not seen[value] then
+			seen[value] = true
+			table.insert(objects, value)
+		end
+	end
+	local readUpvalues = getupvalues or (debug and debug.getupvalues)
+	local function inspect(value)
+		add(value)
+		if type(value) == "function" and type(readUpvalues) == "function" then
+			local ok, upvalues = pcall(readUpvalues, value)
+			if ok and type(upvalues) == "table" then
+				for _, upvalue in pairs(upvalues) do
+					add(upvalue)
+				end
+			end
+		end
+	end
+	if type(getgc) == "function" then
+		local ok, values = pcall(getgc, true)
+		if not ok or type(values) ~= "table" then
+			ok, values = pcall(getgc)
+		end
+		if ok and type(values) == "table" then
+			for _, value in pairs(values) do
+				inspect(value)
+			end
+		end
+	end
+	local readRegistry = getreg or (debug and debug.getregistry)
+	if type(readRegistry) == "function" then
+		local ok, registry = pcall(readRegistry)
+		if ok and type(registry) == "table" then
+			local visited, budget = {}, 12000
+			local function visit(value, depth)
+				inspect(value)
+				if type(value) ~= "table" or visited[value] or depth == 0 or budget <= 0 then
+					return
+				end
+				visited[value] = true
+				for _, child in next, value do
+					budget -= 1
+					if budget <= 0 then
+						break
+					end
+					visit(child, depth - 1)
+				end
+			end
+			visit(registry, 3)
+		end
+	end
+	return objects
+end
+
 function Hub.findNativeModules()
-	if type(getgc) ~= "function" then
-		return
-	end
-	local ok, objects = pcall(getgc, true)
-	if not ok or type(objects) ~= "table" then
-		return
-	end
+	local objects = Hub.nativeObjects()
 	local candidates, scores = {}, {}
 	for _, object in ipairs(objects) do
 		if type(object) == "table" then
@@ -262,7 +344,16 @@ function Hub.module(name)
 	local studioOk, inStudio = pcall(function()
 		return RunService:IsStudio()
 	end)
-	assert(studioOk and inStudio, "Estado nativo indisponível: " .. name .. ". Nenhum módulo extra foi inicializado.")
+	if not (studioOk and inStudio) then
+		local compatibility = Hub.compatibilityModule(name)
+		assert(
+			compatibility,
+			"Esta ação precisa de acesso ao módulo nativo " .. name .. ", indisponível neste executor"
+		)
+		Hub.modules[name] = compatibility
+		Hub.compatibility = true
+		return compatibility
+	end
 	local object = ReplicatedStorage:FindFirstChild(name)
 	assert(object and object:IsA("ModuleScript"), "Módulo indisponível: " .. name)
 	local result = require(object)
@@ -309,7 +400,28 @@ function Hub.job(name, interval, callback)
 end
 
 function Game.stats()
-	return Hub.module("Data").ImportantData.Stats
+	local stats = Hub.module("Data").ImportantData.Stats
+	if stats.compatibility then
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		stats.slotLoaded = root ~= nil
+		stats.world = root and root.Position.X >= 30000 and root.Position.X < 60000 and 2 or 1
+		stats.inField = nil
+		if root then
+			for id, location in pairs(fieldLocations) do
+				local radius = id == "desert" and 260 or 65
+				if
+					math.abs(root.Position.X - location[2]) < radius
+					and math.abs(root.Position.Y - location[3]) < 35
+					and math.abs(root.Position.Z - location[4]) < radius
+				then
+					stats.inField = id
+					stats.world = location[1]
+					break
+				end
+			end
+		end
+	end
+	return stats
 end
 
 function Game.currentWorld()
@@ -322,6 +434,7 @@ function Game.releaseVisibility()
 	end
 	table.clear(Hub.visibilityConnections)
 	Hub.visibilityGuards = nil
+	Hub.machineGuards = nil
 	Hub.restorePatches()
 end
 
@@ -374,6 +487,16 @@ function Game.exposeUpgradeObjects(worldId)
 	if ok then
 		for _, entry in pairs(catalog) do
 			expose(entry)
+		end
+	end
+	if not ok then
+		local root = playerGui:FindFirstChild("W" .. worldId)
+		if root then
+			for _, object in ipairs(root:GetDescendants()) do
+				if object:IsA("GuiObject") and object:FindFirstChild("Identifier") then
+					expose({ object = object })
+				end
+			end
 		end
 	end
 	local chartOk, chart = pcall(Hub.module, "SingularityChart")
@@ -638,6 +761,9 @@ function Game.fieldUnlocked(id, field)
 	if id == "main" or id == "jungle" or stats.inField == id then
 		return true
 	end
+	if stats.compatibility then
+		return false, "Acesso não confirmado; entre no field para usá-lo"
+	end
 	if not stats.slotLoaded and not stats.saveLoaded then
 		return false, "Carregando save"
 	end
@@ -832,12 +958,12 @@ function Game.claimRewards()
 	local hourly = tonumber(stats.hourlyTimeRemaining)
 	Hub.rewardSentAt = Hub.rewardSentAt or {}
 	local now = os.clock()
-	if daily and daily <= 86400 and now - (Hub.rewardSentAt.daily or -math.huge) >= 10 then
+	if (stats.compatibility or (daily and daily <= 86400)) and now - (Hub.rewardSentAt.daily or -math.huge) >= 10 then
 		Game.event({ id = "dailyReward" })
 		Hub.rewardSentAt.daily = now
 		Hub.stats.rewards += 1
 	end
-	if hourly and hourly <= 0 and now - (Hub.rewardSentAt.hourly or -math.huge) >= 10 then
+	if (stats.compatibility or (hourly and hourly <= 0)) and now - (Hub.rewardSentAt.hourly or -math.huge) >= 10 then
 		Game.event({ id = "hourlyReward" })
 		Hub.rewardSentAt.hourly = now
 		Hub.stats.rewards += 1
@@ -936,6 +1062,7 @@ end
 
 function Game.revealMachines(worldId)
 	Game.nativeVisibility(true)
+	Hub.machineGuards = Hub.machineGuards or {}
 	local moved, skipped = 0, 0
 	for _, model in ipairs(Game.worldModels(worldId)) do
 		if model:GetPivot().Position.Y > 100000 then
@@ -948,6 +1075,22 @@ function Game.revealMachines(worldId)
 				skipped += 1
 			end
 		end
+		if Hub.compatibility and model:GetPivot().Position.Y < 100000 then
+			for _, part in ipairs(model:GetDescendants()) do
+				if part:IsA("BasePart") and not Hub.machineGuards[part] then
+					local target = part.CFrame
+					Hub.machineGuards[part] = true
+					table.insert(
+						Hub.visibilityConnections,
+						part:GetPropertyChangedSignal("CFrame"):Connect(function()
+							if Hub.alive and Hub.settings.unlock and part.Position.Y > 100000 then
+								part.CFrame = target
+							end
+						end)
+					)
+				end
+			end
+		end
 	end
 	local root = playerGui:FindFirstChild("W" .. worldId)
 	if root then
@@ -958,9 +1101,20 @@ function Game.revealMachines(worldId)
 			local adornee = surface:IsA("SurfaceGui") and surface.Adornee
 			if adornee and adornee.Position.Y < 100000 then
 				Game.scopedProperty(Hub.mapProperties, surface, "Enabled", true)
+				if Hub.compatibility and not Hub.machineGuards[surface] then
+					Hub.machineGuards[surface] = true
+					table.insert(
+						Hub.visibilityConnections,
+						surface:GetPropertyChangedSignal("Enabled"):Connect(function()
+							if Hub.alive and Hub.settings.unlock and Hub.cameraState == nil and not surface.Enabled then
+								surface.Enabled = true
+							end
+						end)
+					)
+				end
 				for _, object in ipairs(surface:GetDescendants()) do
 					if object:IsA("GuiObject") and object.Name == "Locked" then
-						Game.scopedProperty(Hub.mapProperties, object, "Visible", false)
+						Game.keepVisible(object, false)
 					end
 				end
 			end

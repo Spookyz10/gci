@@ -175,10 +175,94 @@ function Hub.spawn(callback)
 	return thread
 end
 
+local moduleSignatures = {
+	Data = { "ImportantData" },
+	Fields = { "Fields" },
+	Upgrades = { "Basic" },
+	TabManager = { "ShowHideTabs", "menus" },
+	InfoStore = { "Resets", "Store" },
+	MapTeles = { "Teles", "UpdateTeles" },
+	SingularityChart = { "Upgrades", "GetUnlocked", "UpdateSelected" },
+	GalaxyGen = { "CombatState", "EnemyDead" },
+	PlanetRun = { "BitsCreated", "CreateBits" },
+	Solarians = { "Bars", "HasLeveled" },
+}
+
+function Hub.findNativeModules()
+	if type(getgc) ~= "function" then
+		return
+	end
+	local ok, objects = pcall(getgc, true)
+	if not ok or type(objects) ~= "table" then
+		return
+	end
+	local candidates, scores = {}, {}
+	for _, object in ipairs(objects) do
+		if type(object) == "table" then
+			for name, keys in pairs(moduleSignatures) do
+				if not Hub.modules[name] then
+					local matches = true
+					for _, key in ipairs(keys) do
+						if rawget(object, key) == nil then
+							matches = false
+							break
+						end
+					end
+					if matches then
+						local score = 0
+						local important = rawget(object, "ImportantData")
+						local stats = type(important) == "table" and rawget(important, "Stats")
+						if type(stats) == "table" then
+							score += stats.slotLoaded and 100 or 0
+							score += stats.saveLoaded and 50 or 0
+						end
+						local fields = rawget(object, "Fields")
+						if type(fields) == "table" and type(rawget(fields, "main")) == "table" then
+							score += (tonumber(fields.main.max) or 0) > 0 and 100 or 0
+						end
+						for _, key in ipairs({ "Basic", "Upgrades", "Teles", "Bars", "menus" }) do
+							local entries = rawget(object, key)
+							if type(entries) == "table" then
+								for _, entry in pairs(entries) do
+									if
+										typeof(entry) == "Instance"
+										or (
+											type(entry) == "table" and (rawget(entry, "object") or rawget(entry, "obj"))
+										)
+									then
+										score += 1
+									end
+								end
+							end
+						end
+						if scores[name] == nil or score > scores[name] then
+							candidates[name], scores[name] = object, score
+						end
+					end
+				end
+			end
+		end
+	end
+	for name, object in pairs(candidates) do
+		Hub.modules[name] = object
+	end
+end
+
 function Hub.module(name)
 	if Hub.modules[name] then
 		return Hub.modules[name]
 	end
+	if not Hub.nativeScanAt or os.clock() - Hub.nativeScanAt > 2 then
+		Hub.nativeScanAt = os.clock()
+		Hub.findNativeModules()
+	end
+	if Hub.modules[name] then
+		return Hub.modules[name]
+	end
+	local studioOk, inStudio = pcall(function()
+		return RunService:IsStudio()
+	end)
+	assert(studioOk and inStudio, "Estado nativo indisponível: " .. name .. ". Nenhum módulo extra foi inicializado.")
 	local object = ReplicatedStorage:FindFirstChild(name)
 	assert(object and object:IsA("ModuleScript"), "Módulo indisponível: " .. name)
 	local result = require(object)
@@ -361,6 +445,14 @@ function Game.nativeVisibility(enabled)
 			assert(type(manager.ShowHideTabs) == "function", "Controlador de mapa indisponível")
 			local replacement = function() end
 			Hub.visibilityState = { manager = manager, original = manager.ShowHideTabs, replacement = replacement }
+			if type(hookfunction) == "function" then
+				local target = manager.ShowHideTabs
+				local ok, original = pcall(hookfunction, target, replacement)
+				if ok and type(original) == "function" then
+					Hub.visibilityState.target = target
+					Hub.visibilityState.hookOriginal = original
+				end
+			end
 			manager.ShowHideTabs = replacement
 		end
 		Hub.settings.unlock = true
@@ -375,6 +467,9 @@ function Game.nativeVisibility(enabled)
 	end
 	local state = Hub.visibilityState
 	if state then
+		if state.target then
+			hookfunction(state.target, state.hookOriginal)
+		end
 		if state.manager.ShowHideTabs == state.replacement then
 			state.manager.ShowHideTabs = state.original
 		end
@@ -735,12 +830,16 @@ function Game.claimRewards()
 	end
 	local daily = tonumber(stats.dailyTimeRemaining)
 	local hourly = tonumber(stats.hourlyTimeRemaining)
-	if not daily or daily <= 86400 then
+	Hub.rewardSentAt = Hub.rewardSentAt or {}
+	local now = os.clock()
+	if daily and daily <= 86400 and now - (Hub.rewardSentAt.daily or -math.huge) >= 10 then
 		Game.event({ id = "dailyReward" })
+		Hub.rewardSentAt.daily = now
 		Hub.stats.rewards += 1
 	end
-	if not hourly or hourly <= 0 then
+	if hourly and hourly <= 0 and now - (Hub.rewardSentAt.hourly or -math.huge) >= 10 then
 		Game.event({ id = "hourlyReward" })
+		Hub.rewardSentAt.hourly = now
 		Hub.stats.rewards += 1
 	end
 end
@@ -1446,8 +1545,10 @@ function Ui.mapActions(parent, worldId)
 	Ui.button(actions, "Mostrar máquinas de World " .. worldId, function()
 		Game.revealMachines(worldId)
 	end)
-	Ui.button(actions, "Restaurar mapa", function()
-		Game.nativeVisibility(false)
+	Ui.button(actions, "Revelar upgrades ocultos", function()
+		Game.nativeVisibility(true)
+		local count = Game.exposeUpgradeObjects(worldId)
+		Ui.notify(count .. " upgrades revelados neste world")
 	end, true)
 end
 
@@ -1472,10 +1573,6 @@ Ui.renderers.Geral = function(parent)
 	Ui.requestStats = Ui.text(farm, "", 12, Theme.accent)
 	Ui.requestStats.Size = UDim2.new(1, 0, 0, 32)
 	Ui.button(farm, "Teste único: PW8 × 100 em main", Game.testCollect100)
-	local map = Ui.card(parent, "Restaurar", "Desfaz peças, superfícies e regras locais alteradas pelo hub.")
-	Ui.button(map, "Restaurar mapa e câmera", function()
-		Game.nativeVisibility(false)
-	end)
 	local movement = Ui.card(parent, "Velocidade")
 	local speed = Ui.input(movement, "Velocidade", "48")
 	Ui.button(movement, "Aplicar", function()
@@ -1596,6 +1693,12 @@ function Hub.shutdown()
 	end
 	local state = Hub.visibilityState
 	if state then
+		if state.target then
+			local ok, message = pcall(hookfunction, state.target, state.hookOriginal)
+			if not ok then
+				table.insert(failures, tostring(message))
+			end
+		end
 		if state.manager.ShowHideTabs == state.replacement then
 			state.manager.ShowHideTabs = state.original
 		end
@@ -1635,7 +1738,7 @@ Hub.connect(player.Idled, function()
 end)
 
 Hub.job("collection", 0.05, Game.collectAll)
-Hub.job("rewards", 30, Game.claimRewards)
+Hub.job("rewards", 1, Game.claimRewards)
 Hub.job("battles", 0.2, function()
 	if Hub.settings.autoWin then
 		Game.winBattle()

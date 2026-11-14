@@ -55,12 +55,23 @@ modelos e CFrames individuais de peças, incluindo modelos aninhados, além dos
 estados Enabled/Visible alterados. Falhas são informadas e seus registros ficam
 disponíveis para nova tentativa, em vez de serem descartados silenciosamente.
 
-O mesmo botão revela objetos de upgrades existentes no catálogo e no PlayerGui.
+O botão separado Revelar upgrades ocultos fica em World 1 e World 2.
+Mostrar máquinas também revela objetos de upgrades existentes no catálogo e no PlayerGui.
 Eventos de Visible mantêm esses objetos disponíveis sem loop por frame.
 Os nós do chart recebem prereqs vazios e condições locais liberadas; níveis,
-moedas e progresso do save não são falsificados. Restaurar ou fechar desconecta
+moedas e progresso do save não são falsificados. Fechar desconecta
 os eventos e devolve condições e estados originais. Isso não comprova aceitação
 de compras pelo servidor nem cria widgets ausentes do cliente.
+
+O botão de restaurar mapa foi removido. A limpeza ao fechar continua interna.
+O hub consulta tabelas já ativas por getgc, sem requerer módulos novamente no
+jogo publicado. Se o executor não expuser esses objetos, a ação informa a falha.
+Para o controlador de mapa, hookfunction também cobre referências da função
+capturadas antes da execução do hub, quando disponível no executor.
+Daily e hourly usam o estado nativo, com checagem a cada segundo e cooldown de
+10 segundos entre tentativas. Contadores representam tentativas, não pagamentos.
+Após usar versões anteriores, reconecte uma vez para eliminar listeners extras
+que aquelas versões possam ter inicializado; apagar elementos visuais não os encerra.
 
 ## Outros recursos
 

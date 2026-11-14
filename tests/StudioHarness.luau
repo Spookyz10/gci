@@ -109,6 +109,19 @@ return function(runHub)
 		GalaxyGen = { CombatState = { fighting = false, playerStats = { tempLuck = 0 } } },
 	}
 	local cuts, events, active, maxActive, idleCalls = {}, {}, 0, 0, 0
+	modules.TabManager.menus = { shop = shop }
+	modules.InfoStore.Store = {}
+	modules.MapTeles.UpdateTeles = function() end
+	modules.SingularityChart.GetUnlocked = function()
+		return false
+	end
+	modules.SingularityChart.UpdateSelected = function() end
+	modules.GalaxyGen.EnemyDead = function() end
+	modules.PlanetRun.CreateBits = function() end
+	modules.Solarians.HasLeveled = function()
+		return false
+	end
+	local moduleInitializations = 0
 	local remoteFunction = {
 		IsA = function(_, className)
 			return className == "RemoteFunction"
@@ -183,6 +196,17 @@ return function(runHub)
 		},
 	}
 	local environment = {
+		getgc = function()
+			local objects = {
+				{ ImportantData = { Stats = { slotLoaded = false } } },
+				{ Fields = { main = { max = 0 } } },
+				{ ShowHideTabs = function() end, menus = {} },
+			}
+			for _, module in pairs(modules) do
+				table.insert(objects, module)
+			end
+			return objects
+		end,
 		game = {
 			GetService = function(_, name)
 				assert(services[name], name)
@@ -196,6 +220,7 @@ return function(runHub)
 			end,
 		},
 		require = function(object)
+			moduleInitializations += 1
 			return modules[object.Name]
 		end,
 	}
@@ -212,6 +237,23 @@ return function(runHub)
 	end
 	local ok, message = pcall(function()
 		api = runHub(environment)
+		check(api.Game.stats() == stats, "Estado nativo ativo tem preferência sobre cópia vazia")
+		check(moduleInitializations == 0, "Nenhum módulo reinicializado pelo hub")
+		local function hasButton(text)
+			for _, object in ipairs(api.Ui.root:GetDescendants()) do
+				if object:IsA("TextButton") and object.Text == text then
+					return true
+				end
+			end
+			return false
+		end
+		api.Ui.navigate("World 1")
+		check(hasButton("Revelar upgrades ocultos"), "Botão explícito de upgrades em World 1")
+		check(not hasButton("Restaurar mapa"), "Sem botão de restaurar mapa")
+		api.Ui.navigate("World 2")
+		check(hasButton("Revelar upgrades ocultos"), "Botão explícito de upgrades em World 2")
+		api.Ui.navigate("Geral")
+		check(not hasButton("Restaurar mapa e câmera"), "Sem restauração na aba Geral")
 		check(api.Ui.subnav == nil, "Apenas três abas; sem navegação aninhada")
 		for _, page in ipairs({ "Geral", "World 1", "World 2" }) do
 			api.Ui.navigate(page)
@@ -339,6 +381,8 @@ return function(runHub)
 		)
 		upgradeA.Visible = false
 		api.Game.revealMachines(1)
+		modules.TabManager.ShowHideTabs()
+		check(nativeCalls == 0, "Controlador nativo suspenso sem inicializar outro módulo")
 		check(upgradeA.Visible, "Upgrade oculto revelado")
 		check(
 			#chartEntry.prereqs == 0 and chartEntry.unlocked and chartEntry.unlockCondition(),
@@ -403,9 +447,15 @@ return function(runHub)
 		)
 		api.Hub.mapParts[broken] = nil
 		local eventCount = #events
+		stats.slotLoaded = false
+		api.Game.claimRewards()
+		check(#events == eventCount, "Reward aguarda o save nativo")
+		stats.slotLoaded = true
 		signals.Heartbeat:Fire()
 		task.wait(0.05)
 		check(#events == eventCount + 2, "Daily e hourly automáticos")
+		api.Game.claimRewards()
+		check(#events == eventCount + 2, "Reward não repete pedido durante cooldown")
 		signals.Idled:Fire()
 		task.wait(0.08)
 		check(idleCalls == 3, "Anti-AFK automático")
@@ -426,6 +476,7 @@ return function(runHub)
 			assert(not connection.Connected)
 		end
 		check(true, "Conexões encerradas")
+		check(moduleInitializations == 0, "Todas as ações usam módulos nativos sem listeners adicionais")
 	end)
 	if api and api.Hub.alive then
 		api.Ui.root:Destroy()

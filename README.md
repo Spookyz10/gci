@@ -1,68 +1,86 @@
 # Froggyz Hub
 
-Interface Luau responsiva para o projeto aberto no Roblox Studio.
-
-Script distribuível: `src/FroggyzHub.client.luau`. Interface responsiva com abas
-Geral, mundos descobertos no catálogo e Misc; botão flutuante para reabrir.
-Right Shift também alterna a janela no computador.
-
-Inclui auto collect com limite de 5000 por pedido a cada 0,2 s mais o tempo de
-resposta do servidor, tier automático pela cadeia `nextTier`, override de tier e
-quantidade, velocidade local, menus de upgrades/resets, compra máxima por ID,
-daily/hourly, auto win local de Grasslands e `tempLuck` configurável.
-O limite de 5000 é o encontrado no cliente, não um máximo aceito pelo servidor.
-Auto win chama `GalaxyGen.EnemyDead()`; recompensa persistente não foi confirmada.
-Menus sobrepostos podem ser restaurados pelo botão próprio ou fechando o hub.
+Hub Luau independente, com foco em World 1 e World 2. Interface responsiva,
+navegação por sistema, busca de máquinas e compras pelo contexto do jogo.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Spookyz10/gci/main/src/FroggyzHub.client.luau"))()
 ```
 
-Esse carregador requer um ambiente com `game:HttpGet` e `loadstring` habilitados.
-Para usar como código do próprio jogo no Studio, copie o conteúdo para um
-LocalScript em StarterPlayerScripts.
+O carregador requer `game:HttpGet` e `loadstring` disponíveis no ambiente.
+No próprio projeto do Studio, o conteúdo de `src/FroggyzHub.client.luau` também
+pode ser usado como LocalScript em StarterPlayerScripts.
 
-## Verificação
+## Interface
 
-- Parser/formatador StyLua 2.6.0 em modo Luau.
-- Construção isolada no Studio, sem inserir a interface no jogo: abas Geral,
-  World 1, World 2, World 8, World 9 e Misc detectadas no catálogo real.
-- Harness com jogador e remote simulados: coleta enviou exatamente
-  `{id="cut", field="main", identifier="top", quantity=120}` com cap 120 e
-  cadeia de três tiers; a interface foi destruída e conexões limpas ao encerrar.
-- Não foi feito teste contra os handlers originais, ausentes nesta exportação.
+- **K** mostra ou oculta a janela; o botão Froggyz funciona no telefone.
+- Arraste pelo cabeçalho com mouse ou toque. A janela fica dentro da tela.
+- Geral reúne automações, compras e ajustes. As abas de world têm seções por sistema.
+- Ao abrir uma loja nativa, o hub sai da frente e oferece compras num painel flutuante.
+- Fechar pelo **×** encerra tarefas, desconecta eventos e restaura mudanças locais.
 
-## Estado da análise
+## Geral
 
-O arquivo aberto é uma exportação com código do cliente. `ServerScriptService` e
-`ServerStorage` não contêm scripts; nenhuma ocorrência de `OnServerEvent` ou
-`OnServerInvoke` foi encontrada nos fontes. Os scripts Workspace.GamerScript e
-Workspace.GrassSpawner são comentários de exportação, sem implementação.
+- Daily e hourly são solicitados automaticamente quando os timers locais indicam
+  elegibilidade, com verificação a cada 30 segundos e após carregar o save.
+- Anti-AFK conecta ao evento Idled automaticamente. Ambientes que bloqueiam
+  VirtualUser exibem uma mensagem de falha.
+- Auto collect percorre os fields de World 1 e World 2, além dos compartilhados,
+  com cap positivo. Não exige selecionar campo. O lote usa o cap atualizado,
+  limitado a 5000; o tier segue a cadeia `nextTier` do catálogo.
+- Cada field tem no máximo um pedido pendente. Retornos positivos permitem
+  novo pedido após 0,2 s desde o anterior; recusas e erros aguardam 2 segundos.
+- Compras usam o upgrade selecionado no jogo ou os objetos da loja aberta.
+  Não é preciso conhecer IDs. Compras em grupo têm intervalo de 0,1 s.
+- Velocidade local configurável, com restauração do valor anterior.
 
-Por isso, os parâmetros enviados pelo cliente estão confirmados, mas a aceitação
-de valores alterados e seus efeitos persistentes ainda não foram verificados.
+## Acesso e máquinas
 
-As evidências locais em `evidence/` são referências da análise, não componentes
-do hub e não devem ser publicadas junto com ele.
+O jogo usa `TabManager.ShowHideTabs()` para esconder interfaces e mover
+máquinas para Y=200000. O hub substitui essa função enquanto o acesso está
+ativo e restaura a implementação original ao desativar ou encerrar.
+Não há loop reabrindo menus nem hooks globais de propriedades.
 
-## Pontos mapeados
+O catálogo incorpora 99 posições extraídas de chamadas literais do controlador
+original. Máquinas ocultas com posição conhecida voltam ao local do mapa;
+as demais, quando de tamanho compatível, ficam numa área ao lado do field.
+Portas e barreiras têm uma ação separada para remoção local. Pivôs e displays
+alterados são restaurados ao encerrar. Isso não concede progresso no servidor.
 
-| Fluxo | Evidência | Validação do servidor a verificar |
-| --- | --- | --- |
-| Coleta | ColliderFollowPlayer:213 e :468 envia `cut`, `field`, `identifier`, `quantity`; lote normal a cada 0,2 s, limitado localmente a 5000 | Campo desbloqueado, tier, crescimento, cap, frequência e quantidade efetivamente disponível |
-| Upgrades | BuyUpgrade:15 e :25 envia `buyUpgrade`, `upgradeId`, `mode`, `x` | Pré-requisitos, nível máximo, custo calculado e débito atômico |
-| Itens | BuyUpgrade:234 envia `addItem`, `int`, `level`, `quantity` | Origem autorizada, quantidade e prevenção de repetição |
-| Dungeons | BuyUpgrade:226 envia `completeDungeon`, dungeon e difficulty | Sessão ativa, vitória e recompensa única |
-| Batalhas | BuyUpgrade:365 envia `defeatGLEnemy`, enemyId, enemyLevel, difficulty, tempLuck | Resultado autoritativo e sorte calculada no servidor |
-| Planet Run | ClientCollections:140/:164/:187 envia `stopPRTimer` com timer local | Cronômetro do servidor e trajetória válida |
-| Daily/hourly | Botões enviam `dailyReward`/`hourlyReward` | Elegibilidade pelo relógio do servidor e resgate atômico |
-| Saves | LoadSlot, RecoverData e Reserved recebem seleções do cliente | Propriedade do slot, índices, acesso e limites de frequência |
+## World 1
 
-`EarnGrass` modifica dados locais, mas isso por si só não comprova alteração
-da economia persistida. As compras e a coleta atuais usam remotes.
+- Grasslands: auto win pelo caminho local `GalaxyGen.EnemyDead()`, conclusão
+  manual e `tempLuck` configurável antes da solicitação de recompensa.
+- Solarians: alocação até o cap em todas as funções, recall, suspensão das
+  condições locais de visibilidade e acesso a Restoration e Souls.
+- Planet Run: coleta de bits pelas posições SpawnPos e solicitação de conclusão
+  com o mínimo de tempo do catálogo da fase atual.
+- Singularity Chart: compra de nós abaixo do cap e com pré-requisitos locais
+  atendidos, descobrindo IDs internamente.
+- Acesso a Planetary, Planetoids, Supernova, Constellation, Dark Matter e demais
+  menus encontrados no PlayerGui. Resets continuam a exigir confirmação nativa.
 
-## Entrega
+## World 2
 
-Repositório de destino informado pelo usuário: https://github.com/Spookyz10/gci.
-Somente o hub, este documento e `.gitignore` são distribuídos. A pasta de
-evidências permanece local.
+- Coleta multifield compartilhada com Geral.
+- Máquinas e interfaces, Temple Chart e atalhos de progressão.
+- Gauntlet: solicitação da maior ou menor sala disponível e acesso às áreas
+  e aos artefatos pelos seletores nativos.
+
+## Verificação e limites
+
+`tests/StudioHarness.luau` recebe uma função que executa o hub com serviços
+simulados. O harness foi executado no Studio com instâncias reais fora do
+DataModel, cobrindo 42 verificações: navegação, dimensões móveis, coleta de
+ambos os worlds, limite de lote, pedidos pendentes, backoff, compras por loja,
+resgates, anti-AFK, tecla K, charts, posições de máquinas, barreiras e limpeza.
+StyLua valida a sintaxe Luau e a formatação de fonte e testes.
+
+O place aberto é uma exportação sem as implementações originais dos handlers
+do servidor. A análise confirma os protocolos do cliente e os comportamentos
+locais; aceitação de tiers, luck, vitórias, compras, fases e recompensas exige
+teste no jogo com o servidor original. Retorno positivo de coleta não prova
+por si só que uma recompensa foi persistida.
+
+As evidências originais permanecem em `evidence/`, ignoradas pelo Git. O
+repositório distribui o hub, documentação e testes, sem incluir o place exportado.

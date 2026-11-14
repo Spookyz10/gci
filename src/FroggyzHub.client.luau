@@ -20,16 +20,14 @@ local Hub = {
 	jobs = {},
 	patches = {},
 	properties = {},
-	machinePivots = {},
-	fieldRequests = {},
-	collectedFields = {},
-	settings = { collect = false, autoWin = false, autoBits = false, luck = 1000, unlock = false },
+	mapParts = {},
+	mapModels = {},
+	mapProperties = {},
+	focusProperties = {},
+	settings = { collect = false, mode = "pw8", autoWin = false, autoBits = false, luck = 1000, unlock = false },
 	stats = { requests = 0, accepted = 0, rejected = 0, fields = 0, rewards = 0 },
-	currentWorld = 1,
-	nativeMenu = nil,
 	purchaseBusy = false,
 	page = "Geral",
-	section = "Início",
 }
 
 local Theme = {
@@ -45,7 +43,7 @@ local Theme = {
 	danger = Color3.fromRGB(255, 154, 154),
 }
 
-local Ui = { pages = {}, navigation = {}, sectionButtons = {}, order = 0, renderers = {} }
+local Ui = { navigation = {}, order = 0, renderers = {} }
 local Game = {}
 Game.machinePositions = {
 	[1] = {
@@ -240,124 +238,165 @@ function Game.event(payload)
 	return true
 end
 
-function Game.nativeVisibility(enabled)
-	if enabled then
-		local manager = Hub.module("TabManager")
-		assert(type(manager.ShowHideTabs) == "function", "Gerenciador de visibilidade não encontrado")
-		Hub.patch(manager, "ShowHideTabs", function() end)
-		for _, worldName in ipairs({ "W1", "W2", "Solarians" }) do
-			local world = playerGui:FindFirstChild(worldName)
-			if world then
-				for _, object in ipairs(world:GetDescendants()) do
-					if
-						object:IsA("GuiObject")
-						and (object.Name == "Locked" or object.Name == "AutoLock" or object.Name == "FillerLock")
-					then
-						Hub.remember(object, "Visible", false)
-					end
+function Game.restoreScope(scope)
+	local restored, failures = 0, {}
+	for object, properties in pairs(scope) do
+		if object.Parent then
+			for property, state in pairs(properties) do
+				local ok, message = pcall(function()
+					object[property] = state.value
+				end)
+				if ok then
+					properties[property] = nil
+					restored += 1
+				else
+					table.insert(failures, tostring(message))
 				end
 			end
+		else
+			table.clear(properties)
+		end
+		if not next(properties) then
+			scope[object] = nil
+		end
+	end
+	return restored, failures
+end
+
+function Game.scopedProperty(scope, object, property, value)
+	scope[object] = scope[object] or {}
+	if scope[object][property] == nil then
+		scope[object][property] = { value = object[property] }
+	end
+	object[property] = value
+end
+
+function Game.nativeVisibility(enabled)
+	local manager = Hub.module("TabManager")
+	if enabled then
+		if not Hub.visibilityState then
+			assert(type(manager.ShowHideTabs) == "function", "Controlador de mapa indisponível")
+			local replacement = function() end
+			Hub.visibilityState = { manager = manager, original = manager.ShowHideTabs, replacement = replacement }
+			manager.ShowHideTabs = replacement
 		end
 		Hub.settings.unlock = true
-	else
-		Hub.settings.unlock = false
-		Hub.restorePatches()
-		for object, properties in pairs(Hub.properties) do
-			if object.Parent then
-				for property, state in pairs(properties) do
-					if property ~= "WalkSpeed" then
-						pcall(function()
-							object[property] = state.value
-						end)
-						properties[property] = nil
-					end
-				end
-			end
+		return
+	end
+	Game.restoreCamera()
+	local restored, failures = Game.restoreMachines()
+	local properties, propertyFailures = Game.restoreScope(Hub.mapProperties)
+	for _, message in ipairs(propertyFailures) do
+		table.insert(failures, message)
+	end
+	local state = Hub.visibilityState
+	if state then
+		if state.manager.ShowHideTabs == state.replacement then
+			state.manager.ShowHideTabs = state.original
 		end
-		Game.restoreMachines()
-		local manager = Hub.modules.TabManager
-		if manager then
-			pcall(manager.ShowHideTabs)
+		Hub.visibilityState = nil
+	end
+	Hub.settings.unlock = false
+	local ok, message = pcall(manager.ShowHideTabs)
+	if not ok then
+		table.insert(failures, "Atualização nativa: " .. tostring(message))
+	end
+	if #failures > 0 then
+		error("Restauração parcial: " .. #failures .. " falha(s). " .. failures[1])
+	end
+	Ui.notify("Mapa restaurado: " .. restored .. " peças e " .. properties .. " propriedades.")
+	return restored + properties
+end
+
+function Game.restoreCamera()
+	local state = Hub.cameraState
+	if state then
+		local camera = state.camera
+		camera.CameraType = state.cameraType
+		if state.subject and state.subject.Parent then
+			camera.CameraSubject = state.subject
 		end
+		camera.CFrame = state.cframe
+		camera.Focus = state.focus
+		Hub.cameraState = nil
+	end
+	local _, failures = Game.restoreScope(Hub.focusProperties)
+	assert(#failures == 0, "Não foi possível restaurar uma superfície")
+	Hub.nativeSurface = nil
+	if Ui.context then
+		Ui.context.Visible = false
 	end
 end
 
-function Game.openMenu(menu)
-	assert(menu and menu.Parent and menu:IsA("GuiObject"), "Menu ainda não carregado")
+function Game.focusSurface(surface)
+	assert(surface and surface:IsA("SurfaceGui"), "Este sistema não possui SurfaceGui")
+	local adornee = surface.Adornee
+	assert(adornee and adornee:IsA("BasePart"), "A superfície ainda não está ligada à máquina")
+	assert(adornee.Position.Y < 100000, "Máquina oculta. Use Mostrar máquinas neste world.")
+	Game.restoreCamera()
 	Game.nativeVisibility(true)
-	if Hub.nativeMenu and Hub.nativeMenu ~= menu and Hub.nativeMenu.Parent then
-		Hub.nativeMenu.Visible = false
-	end
-	local current = menu
-	while current and current ~= playerGui do
-		if current:IsA("GuiObject") then
-			Hub.remember(current, "Visible", true)
+	local camera = workspace.CurrentCamera
+	assert(camera, "Câmera indisponível")
+	Hub.cameraState = {
+		camera = camera,
+		cameraType = camera.CameraType,
+		subject = camera.CameraSubject,
+		cframe = camera.CFrame,
+		focus = camera.Focus,
+	}
+	for _, worldName in ipairs({ "W1", "W2", "Solarians" }) do
+		local root = playerGui:FindFirstChild(worldName)
+		if root then
+			for _, other in ipairs(root:GetDescendants()) do
+				if
+					other:IsA("SurfaceGui")
+					and other ~= surface
+					and other.Adornee == adornee
+					and other.Face == surface.Face
+				then
+					Game.scopedProperty(Hub.focusProperties, other, "Enabled", false)
+				end
+			end
 		end
-		if current:IsA("ScreenGui") then
-			Hub.remember(current, "Enabled", true)
-		end
-		current = current.Parent
 	end
-	Hub.nativeMenu = menu
+	local ancestor = surface
+	while ancestor and ancestor ~= playerGui do
+		if ancestor:IsA("LayerCollector") then
+			Game.scopedProperty(Hub.focusProperties, ancestor, "Enabled", true)
+		end
+		ancestor = ancestor.Parent
+	end
+	Game.scopedProperty(Hub.focusProperties, surface, "Active", true)
+	local normal = adornee.CFrame:VectorToWorldSpace(Vector3.FromNormalId(surface.Face))
+	local up = adornee.CFrame.UpVector
+	if math.abs(normal:Dot(up)) > 0.95 then
+		up = adornee.CFrame.LookVector
+	end
+	local distance = math.max(8, adornee.Size.Magnitude * 0.9)
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = CFrame.lookAt(adornee.Position + normal * distance, adornee.Position, up)
+	Hub.nativeSurface = surface
 	Ui.window.Visible = false
 	Ui.context.Visible = true
-	Ui.contextTitle.Text = Game.menuTitle(menu)
-	Ui.notify("Menu aberto. Volte pelo botão Froggyz ou pressione K.")
-end
-
-function Game.menuTitle(menu)
-	local name = menu.Name
-	if name == "ShopContainer" or name == "PrestigeMenu" or name == "Upgrades" then
-		name = menu.Parent.Name
-	end
-	return name:gsub("(%l)(%u)", "%1 %2")
-end
-
-function Game.menus(worldId)
-	local world = playerGui:FindFirstChild("W" .. worldId)
-	local result = {}
-	if world then
-		for _, feature in ipairs(world:GetChildren()) do
-			local candidates = {}
-			for _, child in ipairs(feature:GetChildren()) do
-				if
-					child:IsA("GuiObject")
-					and (
-						child.Name == "ShopContainer"
-						or child.Name == "PrestigeMenu"
-						or child.Name == "Upgrades"
-						or child.Name == "Board"
-						or child.Name == "Perks"
-					)
-				then
-					table.insert(candidates, child)
-				end
-			end
-			if #candidates == 0 and feature:IsA("GuiObject") and not feature:FindFirstChild("Locked") then
-				if feature.Name == "TheStar" or feature.Name == "PlanetaryTrials" then
-					table.insert(candidates, feature)
-				end
-			end
-			for _, menu in ipairs(candidates) do
-				table.insert(result, menu)
-			end
-		end
-	end
-	table.sort(result, function(a, b)
-		return Game.menuTitle(a) < Game.menuTitle(b)
-	end)
-	return result
+	Ui.contextTitle.Text = surface.Name:gsub("(%l)(%u)", "%1 %2")
+	Ui.notify("Câmera na máquina. Toque no upgrade normalmente.")
 end
 
 function Game.openFeature(worldName, featureName)
-	local world = playerGui:FindFirstChild(worldName)
-	local feature = world and world:FindFirstChild(featureName)
-	assert(feature, "Interface ainda não carregada: " .. featureName)
-	local menu = feature:FindFirstChild("ShopContainer")
-		or feature:FindFirstChild("PrestigeMenu")
-		or feature:FindFirstChild("Upgrades")
-		or feature
-	Game.openMenu(menu)
+	local root = playerGui:FindFirstChild(worldName)
+	local surface = root and root:FindFirstChild(featureName)
+	assert(surface, "Superfície não carregada: " .. featureName)
+	Game.focusSurface(surface)
+end
+
+function Game.selectedSurface()
+	local id = Game.stats().upgradeSelected
+	local entry = id and Game.catalog()[id]
+	local object = entry and entry.object
+	if typeof(object) == "Instance" then
+		return object:FindFirstAncestorWhichIsA("SurfaceGui")
+	end
+	return nil
 end
 
 function Game.catalog()
@@ -373,32 +412,18 @@ function Game.buySelected()
 	Ui.notify("Compra máxima enviada para o upgrade selecionado.")
 end
 
-function Game.buyShop(menu)
-	assert(not Hub.purchaseBusy, "Uma compra em grupo já está em andamento")
-	assert(menu and menu.Parent, "Abra uma loja pelo hub primeiro")
+function Game.buyShop(surface)
+	surface = Game.selectedSurface() or surface or Hub.nativeSurface
+	assert(not Hub.purchaseBusy, "Uma compra já está em andamento")
+	assert(surface and surface:IsA("SurfaceGui"), "Toque em um upgrade no mapa primeiro")
 	local ids = {}
-	for id, upgrade in pairs(Game.catalog()) do
-		local object = upgrade.object
-		if typeof(object) == "Instance" and object:IsDescendantOf(menu) then
+	for id, entry in pairs(Game.catalog()) do
+		local object = entry.object
+		if typeof(object) == "Instance" and object:FindFirstAncestorWhichIsA("SurfaceGui") == surface then
 			table.insert(ids, id)
 		end
 	end
-	if #ids == 0 then
-		for _, object in ipairs(menu:GetDescendants()) do
-			local identifier = object:FindFirstChild("Identifier")
-			if identifier and identifier:IsA("StringValue") and Game.catalog()[identifier.Value] then
-				ids[identifier.Value] = true
-			end
-		end
-		local found = {}
-		for id in pairs(ids) do
-			if type(id) == "string" then
-				table.insert(found, id)
-			end
-		end
-		ids = found
-	end
-	assert(#ids > 0, "Esta interface não é uma loja de upgrades básicos. Use os botões nativos dela.")
+	assert(#ids > 0, "Nenhum upgrade básico nesta superfície")
 	table.sort(ids)
 	Hub.purchaseBusy = true
 	local ok, message = pcall(function()
@@ -412,69 +437,203 @@ function Game.buyShop(menu)
 	end)
 	Hub.purchaseBusy = false
 	assert(ok, message)
-	Ui.notify("Compra enviada para " .. #ids .. " upgrades da loja. Custos validados pelo jogo.")
+	Ui.notify("Máximo solicitado para " .. #ids .. " upgrades de " .. surface.Name .. ".")
 end
 
-function Game.bestTier(field)
-	local identifier = field.defaultId
-	if identifier == "tier" or identifier == "tier2" then
-		identifier = Game.stats().currentTier
-		local types = Hub.module("GrassTypes").Types
-		local visited = {}
-		while identifier and types[identifier] and not visited[identifier] do
-			visited[identifier] = true
-			local nextTier = types[identifier].nextTier
-			if not nextTier or not types[nextTier] or types[nextTier].special then
-				break
-			end
-			identifier = nextTier
+function Game.upgradeLevel(id)
+	local levels = Hub.module("Data").ImportantData.UpgradeLevels
+	local entry = levels and ((levels.generic and levels.generic[id]) or (levels.upgrades and levels.upgrades[id]))
+	return entry and tonumber(entry.level) or 0
+end
+
+function Game.resetCount(id)
+	local entry = Hub.module("InfoStore").Resets[id]
+	return entry and math.max(tonumber(entry.a) or 0, tonumber(entry.b) or 0) or 0
+end
+
+function Game.fieldUnlocked(id, field)
+	local stats = Game.stats()
+	if not stats.slotLoaded then
+		return false, "Carregando save"
+	end
+	if field.world ~= stats.world and field.world ~= -1 then
+		return false, "Outro world"
+	end
+	if field.unlocked == false or field.locked == true or field.disabled == true then
+		return false, "Bloqueado"
+	end
+	if (tonumber(field.max) or 0) <= 0 then
+		return false, "Cap indisponível"
+	end
+	if field.unlocked == true or stats.inField == id then
+		return true
+	end
+	if id == "main" or id == "jungle" then
+		return true
+	end
+	if id == "anti" then
+		return Game.upgradeLevel("decelerator") > 0, "Precisa de Decelerator"
+	end
+	if id == "un" then
+		return Game.upgradeLevel("recelerator") > 0, "Precisa de Recelerator"
+	end
+	if id == "cavern" then
+		return Game.upgradeLevel("bridge2") > 0 or Game.resetCount("trueAwaken") > 0, "Cavern bloqueada"
+	end
+	if id == "intersection" then
+		return Game.upgradeLevel("bridge3") > 0 or Game.resetCount("rift") > 0, "Intersection bloqueada"
+	end
+	if id == "temple" then
+		return Game.upgradeLevel("b5") > 0 or Game.resetCount("trueAwaken") > 0, "Temple bloqueado"
+	end
+	if id == "desert" then
+		return (tonumber(stats.prog2) or 0) >= 1, "Desert bloqueado"
+	end
+	if id == "cactus" then
+		return (tonumber(stats.prog2) or 0) >= 3
+			or ((tonumber(stats.prog2a) or 0) >= 1 and Game.resetCount("midnight2") >= 6),
+			"Cactus bloqueado"
+	end
+	if id == "rift" then
+		return Game.resetCount("rift") > 0, "Rift bloqueado"
+	end
+	local teleIds = { planet = "field2", blue = "blue", understand = "un", temp = "temp" }
+	local teleId = teleIds[id]
+	if teleId then
+		local entry = Hub.module("MapTeles").Teles[teleId]
+		if entry and type(entry.visibleConditionC) == "function" then
+			local ok, visible = pcall(entry.visibleConditionC)
+			return ok and visible == true, "Área ainda não liberada"
 		end
 	end
-	return identifier
+	return false, "Liberação não confirmada"
+end
+
+function Game.unlockedFields()
+	local result, blocked = {}, {}
+	for id, field in pairs(Hub.module("Fields").Fields) do
+		if field.world == Game.stats().world or field.world == -1 then
+			local ok, unlocked, reason = pcall(Game.fieldUnlocked, id, field)
+			if ok and unlocked then
+				table.insert(result, { id = id, field = field })
+			else
+				table.insert(blocked, { id = id, reason = ok and reason or "Dados indisponíveis" })
+			end
+		end
+	end
+	table.sort(result, function(a, b)
+		return a.id < b.id
+	end)
+	Hub.stats.fields = #result
+	Hub.unlocked = result
+	Hub.blocked = blocked
+	return result
+end
+
+function Game.hasGrass(field)
+	if (tonumber(field.counter) or 0) > 0 then
+		return true
+	end
+	for object in pairs(field.objects or {}) do
+		if typeof(object) == "Instance" and object.Parent and object:IsA("BasePart") and object.Transparency < 1 then
+			return true
+		end
+	end
+	return false
+end
+
+function Game.setFarmMode(mode)
+	assert(mode == "pw8" or mode == "platinum" or mode == "moonstone", "Modo inválido")
+	Hub.settings.mode = mode
+	Hub.nextCollectionAt = 0
+	if Hub.pendingRequest then
+		Ui.notify("Modo alterado. Aguardando o pedido anterior terminar.")
+	end
+	if Ui.refresh then
+		Ui.refresh()
+	end
+end
+
+function Game.requestCut(fieldId, identifier, quantity)
+	assert(not Hub.pendingRequest, "Aguarde o pedido anterior terminar")
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	local remote = remotes and remotes:FindFirstChild("GenericFunction")
+	assert(remote and remote:IsA("RemoteFunction"), "GenericFunction indisponível")
+	local request = { field = fieldId, identifier = identifier, quantity = quantity, sentAt = os.clock() }
+	Hub.pendingRequest = request
+	Hub.stats.requests += 1
+	local ok, result = pcall(function()
+		return remote:InvokeServer({ id = "cut", field = fieldId, identifier = identifier, quantity = quantity })
+	end)
+	Hub.pendingRequest = nil
+	request.ok = ok
+	request.result = result
+	Hub.lastRequest = request
+	if ok and result then
+		Hub.stats.accepted += 1
+	else
+		Hub.stats.rejected += 1
+	end
+	Hub.nextCollectionAt = ok and (request.sentAt + (identifier == "pw8" and 0.2 or 0.08)) or (os.clock() + 1)
+	return ok, result
 end
 
 function Game.collectAll()
-	if not Hub.settings.collect or not Game.stats().slotLoaded then
+	if not Hub.settings.collect or Hub.pendingRequest or os.clock() < (Hub.nextCollectionAt or 0) then
 		return
 	end
-	local fields = Hub.module("Fields").Fields
-	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-	local remote = remotes and remotes:FindFirstChild("GenericFunction")
-	assert(remote and remote:IsA("RemoteFunction"), "Coleta indisponível")
-	local count = 0
-	for id, field in pairs(fields) do
-		local world = field.world or 1
-		local cap = math.floor(math.min(5000, math.max(0, tonumber(field.max) or 0)))
-		if (world == 1 or world == 2 or world == 0 or world == -1) and cap > 0 then
-			count += 1
-			if not Hub.fieldRequests[id] and (Hub.collectedFields[id] or 0) <= os.clock() then
-				local identifier = Game.bestTier(field)
-				if type(identifier) == "string" then
-					Hub.fieldRequests[id] = true
-					local requestedAt = os.clock()
-					Hub.spawn(function()
-						Hub.stats.requests += 1
-						local ok, response = pcall(function()
-							return remote:InvokeServer({
-								id = "cut",
-								field = id,
-								identifier = identifier,
-								quantity = cap,
-							})
-						end)
-						Hub.fieldRequests[id] = nil
-						Hub.collectedFields[id] = ok and response and (requestedAt + 0.2) or (os.clock() + 2)
-						if ok and response then
-							Hub.stats.accepted += 1
-						else
-							Hub.stats.rejected += 1
-						end
-					end)
+	local unlocked = Game.unlockedFields()
+	if #unlocked == 0 then
+		Hub.farmMessage = "Nenhum field liberado neste world"
+		return
+	end
+	local mode = Hub.settings.mode
+	local target
+	if mode == "pw8" then
+		Hub.fieldCursor = ((Hub.fieldCursor or 0) % #unlocked) + 1
+		target = unlocked[Hub.fieldCursor]
+	else
+		if Game.stats().world ~= 1 then
+			Hub.farmMessage = "Platinum e Moonstone usam World 1"
+			return
+		end
+		for _, entry in ipairs(unlocked) do
+			if entry.id == "anti" and Game.hasGrass(entry.field) then
+				target = entry
+				break
+			end
+		end
+		if not target then
+			for _, entry in ipairs(unlocked) do
+				if entry.id == "main" then
+					target = entry
+					break
 				end
 			end
 		end
 	end
-	Hub.stats.fields = count
+	if not target then
+		Hub.farmMessage = "Nenhum field válido para este modo"
+		return
+	end
+	local quantity = mode == "pw8" and math.floor(math.min(5000, target.field.max)) or 1
+	if quantity < 1 then
+		return
+	end
+	Hub.farmMessage = target.id .. " · " .. mode .. " × " .. quantity
+	Game.requestCut(target.id, mode, quantity)
+end
+
+function Game.testCollect100()
+	Hub.settings.collect = false
+	assert(not Hub.pendingRequest, "Farm pausado. Aguarde o pedido em andamento e teste novamente.")
+	Game.setFarmMode("pw8")
+	local field = Hub.module("Fields").Fields.main
+	assert(field and Game.fieldUnlocked("main", field), "Campo inicial indisponível neste world")
+	local ok, result = Game.requestCut("main", "pw8", 100)
+	Ui.notify("PW8 × 100 · main · retorno: " .. tostring(result), not ok or not result)
+	print("Froggyz Teste 100:", ok, result)
+	return ok, result
 end
 
 function Game.claimRewards()
@@ -494,55 +653,84 @@ function Game.claimRewards()
 	end
 end
 
-function Game.restoreMachines()
-	for model, pivot in pairs(Hub.machinePivots) do
-		if model.Parent then
-			pcall(function()
-				model:PivotTo(pivot)
-			end)
+function Game.captureModel(model)
+	local function capturePivot(object)
+		if Hub.mapModels[object] == nil then
+			Hub.mapModels[object] = object:GetPivot()
 		end
 	end
-	table.clear(Hub.machinePivots)
-	if Hub.gallery then
-		Hub.gallery:Destroy()
-		Hub.gallery = nil
+	capturePivot(model)
+	for _, object in ipairs(model:GetDescendants()) do
+		if object:IsA("Model") then
+			capturePivot(object)
+		end
+		if object:IsA("BasePart") and Hub.mapParts[object] == nil then
+			Hub.mapParts[object] = object.CFrame
+		end
 	end
 end
 
-function Game.revealMachines(worldId)
-	Game.nativeVisibility(true)
-	local features = workspace:FindFirstChild("Features")
-	assert(features, "Pasta Features indisponível")
-	local field = Hub.module("Fields").Fields[worldId == 1 and "main" or "jungle"]
-	assert(field and field.spawnArea, "Área do world indisponível")
-	local area = field.spawnArea
-	local center = Vector3.new((area.x.X + area.x.Y) / 2, area.y, (area.z.X + area.z.Y) / 2)
-	if not Hub.gallery then
-		Hub.gallery = Instance.new("Folder")
-		Hub.gallery.Name = "FroggyzMachines"
-		Hub.gallery.Parent = features.Parent
+function Game.restoreMachines()
+	local restored, failures = 0, {}
+	local models = {}
+	for model in pairs(Hub.mapModels) do
+		table.insert(models, model)
 	end
-	local candidates = {}
-	local function isBarrier(name)
-		name = name:lower()
-		for _, token in ipairs({ "door", "gate", "closed", "blocker", "wall", "lock" }) do
-			if name:find(token, 1, true) then
-				return true
+	local function depth(object)
+		local count = 0
+		while object.Parent do
+			object = object.Parent
+			count += 1
+		end
+		return count
+	end
+	table.sort(models, function(a, b)
+		return depth(a) < depth(b)
+	end)
+	for _, model in ipairs(models) do
+		if model.Parent then
+			local ok, message = pcall(function()
+				model:PivotTo(Hub.mapModels[model])
+			end)
+			if not ok then
+				table.insert(failures, tostring(message))
 			end
 		end
-		return false
 	end
+	for part, cframe in pairs(Hub.mapParts) do
+		if part.Parent then
+			local ok, message = pcall(function()
+				part.CFrame = cframe
+			end)
+			if ok then
+				Hub.mapParts[part] = nil
+				restored += 1
+			else
+				table.insert(failures, tostring(message))
+			end
+		else
+			Hub.mapParts[part] = nil
+		end
+	end
+	if #failures == 0 then
+		table.clear(Hub.mapModels)
+	end
+	return restored, failures
+end
+
+function Game.worldModels(worldId)
+	local features = workspace:FindFirstChild("Features")
+	assert(features, "Features indisponível")
+	local root = features
+	if worldId == 2 then
+		root = features:FindFirstChild("W2")
+	end
+	assert(root, "World indisponível")
+	local result = {}
 	local function visit(folder)
 		for _, child in ipairs(folder:GetChildren()) do
 			if child:IsA("Model") then
-				for _, object in ipairs(child:GetDescendants()) do
-					if object:IsA("SurfaceGui") or object:IsA("BillboardGui") then
-						Hub.remember(object, "Enabled", true)
-					end
-				end
-				if child:GetPivot().Position.Y > 100000 and not isBarrier(child.Name) then
-					table.insert(candidates, child)
-				end
+				table.insert(result, child)
 			elseif
 				child:IsA("Folder")
 				and (worldId == 2 or (child.Name ~= "W2" and child.Name ~= "Real" and child.Name ~= "Quantity"))
@@ -551,94 +739,73 @@ function Game.revealMachines(worldId)
 			end
 		end
 	end
-	if worldId == 2 then
-		local world = features:FindFirstChild("W2")
-		assert(world, "Máquinas de World 2 indisponíveis")
-		visit(world)
-	else
-		visit(features)
-	end
-	table.sort(candidates, function(a, b)
-		return a.Name < b.Name
-	end)
-	local moved = 0
-	local nativeCount = 0
-	for _, model in ipairs(candidates) do
-		local box, size = model:GetBoundingBox()
-		local nativePivot = Game.machinePositions[worldId][model.Name]
-		if nativePivot or size.Magnitude < 650 then
-			local pivot = model:GetPivot()
-			Hub.machinePivots[model] = Hub.machinePivots[model] or pivot
-			local index = moved - nativeCount
-			local base = center + Vector3.new((index % 6 - 2.5) * 150, 1, 180 + math.floor(index / 6) * 150)
-			local offsetY = pivot.Position.Y - (box.Position.Y - size.Y / 2)
+	visit(root)
+	return result
+end
+
+function Game.revealMachines(worldId)
+	Game.nativeVisibility(true)
+	local moved, skipped = 0, 0
+	for _, model in ipairs(Game.worldModels(worldId)) do
+		if model:GetPivot().Position.Y > 100000 then
+			local nativePivot = Game.machinePositions[worldId][model.Name]
 			if nativePivot then
+				Game.captureModel(model)
 				model:PivotTo(nativePivot)
-				nativeCount += 1
+				moved += 1
 			else
-				model:PivotTo(CFrame.new(base + Vector3.new(0, offsetY, 0)))
-				local floor = Instance.new("Part")
-				floor.Name = model.Name
-				floor.Anchored = true
-				floor.Size = Vector3.new(math.max(48, size.X + 8), 2, math.max(48, size.Z + 8))
-				floor.Color = Theme.panel
-				floor.CFrame = CFrame.new(base - Vector3.new(0, 1, 0))
-				floor.Parent = Hub.gallery
-			end
-			for _, object in ipairs(model:GetDescendants()) do
-				if object:IsA("SurfaceGui") or object:IsA("BillboardGui") then
-					Hub.remember(object, "Enabled", true)
-				end
-			end
-			moved += 1
-			if moved % 8 == 0 then
-				task.wait()
+				skipped += 1
 			end
 		end
 	end
-	Ui.notify(
-		nativeCount .. " máquinas nas posições originais; " .. (moved - nativeCount) .. " na área ao lado do field."
-	)
+	local root = playerGui:FindFirstChild("W" .. worldId)
+	if root then
+		if root:IsA("LayerCollector") then
+			Game.scopedProperty(Hub.mapProperties, root, "Enabled", true)
+		end
+		for _, surface in ipairs(root:GetChildren()) do
+			local adornee = surface:IsA("SurfaceGui") and surface.Adornee
+			if adornee and adornee.Position.Y < 100000 then
+				Game.scopedProperty(Hub.mapProperties, surface, "Enabled", true)
+				for _, object in ipairs(surface:GetDescendants()) do
+					if object:IsA("GuiObject") and object.Name == "Locked" then
+						Game.scopedProperty(Hub.mapProperties, object, "Visible", false)
+					end
+				end
+			end
+		end
+	end
+	Ui.notify(moved .. " máquinas reveladas no mapa; " .. skipped .. " sem posição confirmada, mantidas intactas.")
+	return moved, skipped
 end
 
 function Game.removeBarriers(worldId)
 	Game.nativeVisibility(true)
-	local features = workspace:FindFirstChild("Features")
-	assert(features, "Pasta Features indisponível")
-	local target = features
-	if worldId == 2 then
-		target = features:FindFirstChild("W2")
-	end
-	assert(target, "World indisponível")
-	local secondWorld = features:FindFirstChild("W2")
-	local realWorld = features:FindFirstChild("Real")
-	local quantityWorld = features:FindFirstChild("Quantity")
 	local count = 0
-	for _, object in ipairs(target:GetDescendants()) do
-		local excluded = worldId == 1
-			and (
-				(secondWorld and object:IsDescendantOf(secondWorld))
-				or (realWorld and object:IsDescendantOf(realWorld))
-				or (quantityWorld and object:IsDescendantOf(quantityWorld))
-			)
-		if object:IsA("Model") and not excluded then
-			local name = object.Name:lower()
+	for _, root in ipairs(Game.worldModels(worldId)) do
+		local candidates = { root }
+		for _, object in ipairs(root:GetDescendants()) do
+			if object:IsA("Model") then
+				table.insert(candidates, object)
+			end
+		end
+		for _, model in ipairs(candidates) do
+			local name = model.Name:lower()
 			if
 				name:find("door", 1, true)
 				or name:find("gate", 1, true)
 				or name:find("closed", 1, true)
 				or name:find("blocker", 1, true)
 			then
-				local pivot = object:GetPivot()
-				if pivot.Position.Y < 100000 then
-					Hub.machinePivots[object] = Hub.machinePivots[object] or pivot
-					object:PivotTo(CFrame.new(0, 200000, 0))
+				if model:GetPivot().Position.Y < 100000 then
+					Game.captureModel(model)
+					model:PivotTo(CFrame.new(0, 200000, 0))
 					count += 1
 				end
 			end
 		end
 	end
-	Ui.notify(count .. " barreiras locais removidas. O servidor ainda pode restringir acesso.")
+	Ui.notify(count .. " barreiras locais ocultadas.")
 end
 
 function Game.winBattle()
@@ -870,20 +1037,6 @@ function Ui.card(parent, title, description, tag)
 	return actions, card
 end
 
-function Ui.toggle(parent, key, title)
-	local function caption()
-		return title .. "   ·   " .. (Hub.settings[key] and "Ligado" or "Desligado")
-	end
-	local button
-	button = Ui.button(parent, caption(), function()
-		Hub.settings[key] = not Hub.settings[key]
-		button.Text = caption()
-		button.BackgroundColor3 = Hub.settings[key] and Theme.accent or Theme.border
-		button.TextColor3 = Hub.settings[key] and Theme.accentInk or Theme.text
-	end, Hub.settings[key])
-	return button
-end
-
 function Ui.input(parent, placeholder, initial)
 	return Ui.round(
 		Ui.create("TextBox", {
@@ -894,7 +1047,7 @@ function Ui.input(parent, placeholder, initial)
 			PlaceholderText = placeholder,
 			PlaceholderColor3 = Theme.muted,
 			TextColor3 = Theme.text,
-			TextSize = 14,
+			TextSize = 15,
 			Font = Enum.Font.Gotham,
 			ClearTextOnFocus = false,
 		}, parent),
@@ -902,22 +1055,38 @@ function Ui.input(parent, placeholder, initial)
 	)
 end
 
-function Ui.section(parent, text)
-	Ui.order += 1
-	local title = Ui.text(parent, text, 18, Theme.text, true)
-	title.Size = UDim2.new(1, 0, 0, 34)
-	title.AutomaticSize = Enum.AutomaticSize.Y
-	title.LayoutOrder = Ui.order
+function Ui.toggle(parent, key, label)
+	local button
+	local function update()
+		local enabled = Hub.settings[key]
+		button.Text = label .. (enabled and "   ·   Ligado" or "   ·   Desligado")
+		button.BackgroundColor3 = enabled and Theme.accent or Theme.border
+		button.TextColor3 = enabled and Theme.accentInk or Theme.text
+	end
+	button = Ui.button(parent, label, function()
+		Hub.settings[key] = not Hub.settings[key]
+		update()
+	end)
+	update()
+	return button
+end
+
+function Ui.grid(parent, columns, height)
+	local grid = Ui.create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, height or 44) }, parent)
+	Ui.create("UIGridLayout", {
+		CellSize = UDim2.new(1 / columns, -8, 0, 44),
+		CellPadding = UDim2.fromOffset(8, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, grid)
+	return grid
 end
 
 function Ui.buildShell()
-	Ui.root = Ui.create("ScreenGui", {
-		Name = "FroggyzHub",
-		ResetOnSpawn = false,
-		DisplayOrder = 100,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		IgnoreGuiInset = false,
-	}, playerGui)
+	Ui.root = Ui.create(
+		"ScreenGui",
+		{ Name = "FroggyzHub", ResetOnSpawn = false, DisplayOrder = 100, ZIndexBehavior = Enum.ZIndexBehavior.Sibling },
+		playerGui
+	)
 	Ui.canvas =
 		Ui.create("Frame", { Name = "Canvas", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, Ui.root)
 	Ui.window = Ui.round(
@@ -927,57 +1096,49 @@ function Ui.buildShell()
 			BorderSizePixel = 0,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(720, 640),
+			Size = UDim2.fromOffset(620, 680),
 			ClipsDescendants = true,
 		}, Ui.canvas),
-		17
+		16
 	)
 	Ui.stroke(Ui.window)
 	Ui.header = Ui.create("Frame", {
 		Name = "DragHeader",
 		BackgroundColor3 = Theme.panel,
 		BorderSizePixel = 0,
-		Size = UDim2.new(1, 0, 0, 72),
+		Size = UDim2.new(1, 0, 0, 64),
 		Active = true,
 	}, Ui.window)
 	local mark = Ui.round(
 		Ui.create(
 			"Frame",
-			{ BackgroundColor3 = Theme.accent, Position = UDim2.fromOffset(16, 16), Size = UDim2.fromOffset(38, 38) },
+			{ BackgroundColor3 = Theme.accent, Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(16, 15) },
 			Ui.header
 		),
-		12
+		10
 	)
-	local glyph = Ui.text(mark, "F", 24, Theme.accentInk, true)
+	local glyph = Ui.text(mark, "F", 22, Theme.accentInk, true)
 	glyph.Size = UDim2.fromScale(1, 1)
 	glyph.TextXAlignment = Enum.TextXAlignment.Center
 	local title = Ui.text(Ui.header, "Froggyz Hub", 20, Theme.text, true)
-	title.Position = UDim2.fromOffset(66, 13)
-	title.Size = UDim2.new(1, -178, 0, 25)
-	local subtitle = Ui.text(Ui.header, "World 1 + 2  ·  arraste aqui", 11, Theme.muted)
-	subtitle.Position = UDim2.fromOffset(66, 39)
-	subtitle.Size = UDim2.new(1, -170, 0, 18)
+	title.Position = UDim2.fromOffset(60, 10)
+	title.Size = UDim2.new(1, -164, 0, 25)
+	local caption = Ui.text(Ui.header, "v3  ·  arraste para mover", 12, Theme.muted)
+	caption.Position = UDim2.fromOffset(60, 35)
+	caption.Size = UDim2.new(1, -164, 0, 18)
 	local minimize = Ui.button(Ui.header, "−", function()
 		Ui.window.Visible = false
 	end)
-	minimize.Size = UDim2.fromOffset(38, 38)
-	minimize.Position = UDim2.new(1, -94, 0, 16)
+	minimize.Size = UDim2.fromOffset(34, 34)
+	minimize.Position = UDim2.new(1, -88, 0, 15)
 	local close = Ui.button(Ui.header, "×", function()
 		Ui.root:Destroy()
 	end)
-	close.Size = UDim2.fromOffset(38, 38)
-	close.Position = UDim2.new(1, -50, 0, 16)
-	Ui.nav = Ui.create("Frame", {
-		Name = "Navigation",
-		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(14, 82),
-		Size = UDim2.new(1, -28, 0, 44),
-	}, Ui.window)
-	Ui.create("UIGridLayout", {
-		CellSize = UDim2.new(1 / 3, -6, 1, 0),
-		CellPadding = UDim2.fromOffset(8, 0),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-	}, Ui.nav)
+	close.Size = UDim2.fromOffset(34, 34)
+	close.Position = UDim2.new(1, -46, 0, 15)
+	Ui.nav = Ui.grid(Ui.window, 3, 44)
+	Ui.nav.Position = UDim2.fromOffset(14, 76)
+	Ui.nav.Size = UDim2.new(1, -28, 0, 44)
 	for index, name in ipairs({ "Geral", "World 1", "World 2" }) do
 		local button = Ui.button(Ui.nav, name, function()
 			Ui.navigate(name)
@@ -985,28 +1146,12 @@ function Ui.buildShell()
 		button.LayoutOrder = index
 		Ui.navigation[name] = button
 	end
-	Ui.subnav = Ui.create("ScrollingFrame", {
-		Name = "Sections",
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Position = UDim2.fromOffset(14, 138),
-		Size = UDim2.new(1, -28, 0, 40),
-		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = Enum.AutomaticSize.X,
-		ScrollingDirection = Enum.ScrollingDirection.X,
-		ScrollBarThickness = 2,
-	}, Ui.window)
-	Ui.create("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		Padding = UDim.new(0, 8),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-	}, Ui.subnav)
 	Ui.body = Ui.create("ScrollingFrame", {
 		Name = "Content",
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Position = UDim2.fromOffset(14, 190),
-		Size = UDim2.new(1, -28, 1, -248),
+		Position = UDim2.fromOffset(14, 132),
+		Size = UDim2.new(1, -28, 1, -186),
 		CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollBarThickness = 3,
@@ -1014,53 +1159,49 @@ function Ui.buildShell()
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 	}, Ui.window)
 	Ui.column(Ui.body, 12)
-	Ui.create("UIPadding", { PaddingRight = UDim.new(0, 7), PaddingBottom = UDim.new(0, 16) }, Ui.body)
+	Ui.create("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 14) }, Ui.body)
 	local footer = Ui.create("Frame", {
 		BackgroundColor3 = Theme.panel,
 		BorderSizePixel = 0,
-		Position = UDim2.new(0, 0, 1, -48),
-		Size = UDim2.new(1, 0, 0, 48),
+		Position = UDim2.new(0, 0, 1, -42),
+		Size = UDim2.new(1, 0, 0, 42),
 	}, Ui.window)
-	Ui.status = Ui.text(footer, "Pronto. Daily, hourly e anti-AFK já estão ativos.", 12, Theme.muted)
-	Ui.status.Position = UDim2.fromOffset(14, 4)
-	Ui.status.Size = UDim2.new(1, -28, 1, -8)
+	Ui.status = Ui.text(footer, "Pronto. Daily, hourly e anti-AFK automáticos.", 12, Theme.muted)
+	Ui.status.Position = UDim2.fromOffset(14, 3)
+	Ui.status.Size = UDim2.new(1, -28, 1, -6)
 	Ui.status.TextTruncate = Enum.TextTruncate.AtEnd
 	Ui.floating = Ui.button(Ui.canvas, "Froggyz  ·  K", function()
 		Ui.window.Visible = not Ui.window.Visible
 	end, true)
-	Ui.floating.Size = UDim2.fromOffset(134, 44)
+	Ui.floating.Size = UDim2.fromOffset(132, 44)
 	Ui.floating.Position = UDim2.new(0, 12, 1, -56)
 	Ui.context = Ui.round(
 		Ui.create("Frame", {
-			Name = "ShopActions",
+			Name = "SurfaceActions",
 			BackgroundColor3 = Theme.panel,
 			BorderSizePixel = 0,
-			Size = UDim2.fromOffset(240, 148),
-			Position = UDim2.new(1, -252, 1, -220),
+			Size = UDim2.fromOffset(232, 208),
+			Position = UDim2.new(1, -244, 1, -280),
 			Visible = false,
 		}, Ui.canvas),
-		14
+		12
 	)
 	Ui.stroke(Ui.context)
 	Ui.create("UIPadding", {
 		PaddingLeft = UDim.new(0, 12),
 		PaddingRight = UDim.new(0, 12),
-		PaddingTop = UDim.new(0, 10),
-		PaddingBottom = UDim.new(0, 10),
+		PaddingTop = UDim.new(0, 12),
+		PaddingBottom = UDim.new(0, 12),
 	}, Ui.context)
 	Ui.column(Ui.context, 8)
-	Ui.contextTitle = Ui.text(Ui.context, "Loja do jogo", 13, Theme.accent, true)
+	Ui.contextTitle = Ui.text(Ui.context, "Superfície no mapa", 14, Theme.accent, true)
 	Ui.button(Ui.context, "Máximo do selecionado", Game.buySelected)
-	Ui.button(Ui.context, "Máximo desta loja", function()
-		Game.buyShop(Hub.nativeMenu)
-	end, true)
+	Ui.button(Ui.context, "Máximo desta superfície", function()
+		Game.buyShop(Hub.nativeSurface)
+	end)
+	Ui.button(Ui.context, "Voltar à câmera anterior", Game.restoreCamera, true)
 	Ui.resize()
 	Hub.connect(Ui.canvas:GetPropertyChangedSignal("AbsoluteSize"), Ui.resize)
-	Hub.connect(Ui.window:GetPropertyChangedSignal("Visible"), function()
-		if Ui.window.Visible then
-			Ui.context.Visible = false
-		end
-	end)
 	Ui.enableDragging()
 end
 
@@ -1070,10 +1211,10 @@ function Ui.resize(viewportOverride)
 	end
 	local viewport = typeof(viewportOverride) == "Vector2" and viewportOverride or Ui.canvas.AbsoluteSize
 	if viewport.X < 1 or viewport.Y < 1 then
-		viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 650)
+		viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 700)
 	end
-	local width = math.min(760, math.max(260, viewport.X - 20))
-	local height = math.min(700, math.max(240, viewport.Y - 28))
+	local width = math.min(640, math.max(260, viewport.X - 20))
+	local height = math.min(720, math.max(250, viewport.Y - 24))
 	Ui.window.Size = UDim2.fromOffset(width, height)
 	if Hub.dragged then
 		local position = Ui.window.Position
@@ -1084,46 +1225,44 @@ function Ui.resize(viewportOverride)
 	end
 end
 
+function Ui.beginDrag(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	Hub.drag = {
+		input = input,
+		start = input.Position,
+		origin = Ui.window.AbsolutePosition - Ui.canvas.AbsolutePosition + Ui.window.AbsoluteSize / 2,
+	}
+end
+
+function Ui.moveDrag(input)
+	local drag = Hub.drag
+	if not drag then
+		return
+	end
+	if drag.input.UserInputType == Enum.UserInputType.Touch and input ~= drag.input then
+		return
+	end
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	local delta = input.Position - drag.start
+	local desired = drag.origin + Vector2.new(delta.X, delta.Y)
+	local viewport, size = Ui.canvas.AbsoluteSize, Ui.window.AbsoluteSize
+	Ui.window.Position = UDim2.fromOffset(
+		math.clamp(desired.X, size.X / 2, math.max(size.X / 2, viewport.X - size.X / 2)),
+		math.clamp(desired.Y, size.Y / 2, math.max(size.Y / 2, viewport.Y - size.Y / 2))
+	)
+	Hub.dragged = true
+end
+
 function Ui.enableDragging()
-	local drag
-	Hub.connect(Ui.header.InputBegan, function(input)
-		if
-			input.UserInputType ~= Enum.UserInputType.MouseButton1
-			and input.UserInputType ~= Enum.UserInputType.Touch
-		then
-			return
-		end
-		drag = {
-			input = input,
-			start = input.Position,
-			origin = Ui.window.AbsolutePosition - Ui.canvas.AbsolutePosition + Ui.window.AbsoluteSize / 2,
-		}
-	end)
-	Hub.connect(UserInputService.InputChanged, function(input)
-		if not drag then
-			return
-		end
-		if drag.input.UserInputType == Enum.UserInputType.Touch and input ~= drag.input then
-			return
-		end
-		if
-			input.UserInputType ~= Enum.UserInputType.MouseMovement
-			and input.UserInputType ~= Enum.UserInputType.Touch
-		then
-			return
-		end
-		local delta = input.Position - drag.start
-		local desired = drag.origin + Vector2.new(delta.X, delta.Y)
-		local viewport, size = Ui.canvas.AbsoluteSize, Ui.window.AbsoluteSize
-		Ui.window.Position = UDim2.fromOffset(
-			math.clamp(desired.X, size.X / 2, math.max(size.X / 2, viewport.X - size.X / 2)),
-			math.clamp(desired.Y, size.Y / 2, math.max(size.Y / 2, viewport.Y - size.Y / 2))
-		)
-		Hub.dragged = true
-	end)
+	Hub.connect(Ui.header.InputBegan, Ui.beginDrag)
+	Hub.connect(UserInputService.InputChanged, Ui.moveDrag)
 	Hub.connect(UserInputService.InputEnded, function(input)
-		if drag and (input == drag.input or input.UserInputType == Enum.UserInputType.MouseButton1) then
-			drag = nil
+		if Hub.drag and (input == Hub.drag.input or input.UserInputType == Enum.UserInputType.MouseButton1) then
+			Hub.drag = nil
 		end
 	end)
 	Hub.connect(UserInputService.InputBegan, function(input, processed)
@@ -1145,393 +1284,198 @@ function Ui.clearContent()
 	end
 	Ui.body.CanvasPosition = Vector2.zero
 	Ui.order = 0
-	Ui.summary = nil
+	Ui.farmStatus = nil
+	Ui.farmButton = nil
+	Ui.modeButtons = {}
+	Ui.requestStats = nil
 end
 
-function Ui.navigate(page, section)
+function Ui.navigate(page)
 	Hub.page = page
-	local sections = page == "Geral" and { "Início", "Compras", "Ajustes" }
-		or page == "World 1" and { "Acesso", "Grasslands", "Solarians", "Planet Run", "Chart" }
-		or { "Acesso", "Templo", "Gauntlet" }
-	Hub.section = section or sections[1]
 	for name, button in pairs(Ui.navigation) do
 		button.BackgroundColor3 = name == page and Theme.accent or Theme.panel
 		button.TextColor3 = name == page and Theme.accentInk or Theme.muted
 	end
-	for _, child in ipairs(Ui.subnav:GetChildren()) do
-		if child:IsA("GuiObject") then
-			child:Destroy()
-		end
-	end
-	for index, name in ipairs(sections) do
-		local button = Ui.button(Ui.subnav, name, function()
-			Ui.navigate(page, name)
-		end)
-		button.Size = UDim2.fromOffset((name == "Grasslands" or name == "Planet Run") and 116 or 104, 34)
-		button.LayoutOrder = index
-		button.BackgroundColor3 = name == Hub.section and Theme.card or Theme.background
-		button.TextColor3 = name == Hub.section and Theme.accent or Theme.muted
-	end
 	Ui.clearContent()
-	local key = page .. "/" .. Hub.section
-	local renderer = Ui.renderers[key]
+	local renderer = Ui.renderers[page]
 	if renderer then
-		Hub.spawn(function()
-			if Hub.alive and Hub.page .. "/" .. Hub.section == key then
-				renderer(Ui.body)
+		renderer(Ui.body)
+	end
+	Ui.refresh()
+end
+
+function Ui.refresh()
+	if Ui.modeButtons then
+		for mode, button in pairs(Ui.modeButtons) do
+			if button.Parent then
+				local selected = mode == Hub.settings.mode
+				button.BackgroundColor3 = selected and Theme.accent or Theme.border
+				button.TextColor3 = selected and Theme.accentInk or Theme.text
 			end
+		end
+	end
+	if Ui.farmButton and Ui.farmButton.Parent then
+		Ui.farmButton.Text = Hub.settings.collect and "Parar farm" or "Iniciar farm"
+		Ui.farmButton.BackgroundColor3 = Hub.settings.collect and Theme.border or Theme.accent
+		Ui.farmButton.TextColor3 = Hub.settings.collect and Theme.text or Theme.accentInk
+	end
+	if Ui.farmStatus and Ui.farmStatus.Parent then
+		local mode = Hub.settings.mode == "pw8" and "PW8"
+			or Hub.settings.mode == "platinum" and "Platinum"
+			or "Moonstone"
+		local pending = Hub.pendingRequest
+		local state = not Hub.settings.collect and "Parado" or pending and "Aguardando retorno" or "Ativo"
+		Ui.farmStatus.Text = state
+			.. " · "
+			.. mode
+			.. "\n"
+			.. (Hub.farmMessage or "Somente fields liberados no world atual")
+	end
+	if Ui.requestStats and Ui.requestStats.Parent then
+		Ui.requestStats.Text = Hub.stats.requests
+			.. " enviados  ·  "
+			.. Hub.stats.accepted
+			.. " positivos  ·  "
+			.. Hub.stats.rejected
+			.. " recusas/erros"
+	end
+end
+
+function Ui.surfaceShortcuts(parent, worldName, entries)
+	local grid = Ui.grid(parent, 2, math.ceil(#entries / 2) * 52 - 8)
+	for index, entry in ipairs(entries) do
+		local button = Ui.button(grid, entry[1], function()
+			Game.openFeature(worldName, entry[2])
 		end)
+		button.LayoutOrder = index
 	end
 end
 
-function Ui.renderAccess(parent, worldId)
-	Ui.section(parent, "Todos os sistemas, em um só lugar")
-	local actions = Ui.card(
-		parent,
-		"Acesso às máquinas",
-		"Mantém as máquinas visíveis. Usa posições originais mapeadas; as demais ficam ao lado do field. A mudança é local.",
-		"WORLD " .. worldId
-	)
-	Ui.button(actions, "Exibir máquinas ocultas", function()
+function Ui.mapActions(parent, worldId)
+	local actions =
+		Ui.card(parent, "Máquinas no mapa", "Mostrar usa apenas posições confirmadas. Nenhuma loja vira uma janela.")
+	Ui.button(actions, "Mostrar máquinas de World " .. worldId, function()
 		Game.revealMachines(worldId)
-	end, true)
-	Ui.button(actions, "Remover portas e barreiras locais", function()
-		Game.removeBarriers(worldId)
 	end)
-	Ui.button(actions, "Restaurar máquinas e regras do jogo", function()
+	Ui.button(actions, "Restaurar mapa", function()
 		Game.nativeVisibility(false)
-		Ui.notify("Máquinas e regras de visibilidade restauradas.")
-	end)
-	local searchActions = Ui.card(
-		parent,
-		"Abrir interfaces",
-		"Pesquise pelo nome da máquina. Apenas um menu abre por vez e o hub sai da frente."
-	)
-	local search = Ui.input(searchActions, "Buscar máquina…")
-	local results = Ui.create("Frame", {
-		Name = "MenuResults",
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-	}, searchActions)
-	Ui.column(results, 8)
-	local menus = Game.menus(worldId)
-	local function populate()
-		for _, child in ipairs(results:GetChildren()) do
-			if child:IsA("GuiObject") then
-				child:Destroy()
-			end
-		end
-		local query = string.lower(search.Text)
-		local count = 0
-		for _, menu in ipairs(menus) do
-			local title = Game.menuTitle(menu)
-			if query == "" or string.find(string.lower(title), query, 1, true) then
-				count += 1
-				Ui.button(results, title .. "  →", function()
-					Game.openMenu(menu)
-				end)
-			end
-		end
-		if count == 0 then
-			Ui.text(results, "Nenhuma interface encontrada. Aguarde o save carregar.", 13, Theme.muted)
-		end
+	end, true)
+end
+
+Ui.renderers.Geral = function(parent)
+	local farm = Ui.card(parent, "Farm", "Escolha um modo. Platinum e Moonstone enviam sempre 1.")
+	local modes = Ui.grid(farm, 3, 44)
+	Ui.modeButtons = {}
+	for index, entry in ipairs({ { "pw8", "PW8" }, { "platinum", "Platinum" }, { "moonstone", "Moonstone" } }) do
+		local button = Ui.button(modes, entry[2], function()
+			Game.setFarmMode(entry[1])
+		end)
+		button.LayoutOrder = index
+		Ui.modeButtons[entry[1]] = button
 	end
-	Hub.connect(search:GetPropertyChangedSignal("Text"), populate, true)
-	populate()
-end
-
-Ui.renderers["Geral/Início"] = function(parent)
-	Ui.section(parent, "Seu painel de automação")
-	local summary = Ui.card(
-		parent,
-		"Já cuidamos do básico",
-		"Daily + hourly automáticos e anti-AFK ativo desde a abertura. Você só precisa ligar as automações que quiser usar.",
-		"SEMPRE ATIVO"
-	)
-	Ui.summary = Ui.text(summary, "Carregando status…", 13, Theme.accent)
-	Ui.summary.Size = UDim2.new(1, 0, 0, 38)
-	local actions = Ui.card(
-		parent,
-		"Coletar em todos os fields",
-		"Detecta os fields de World 1 e 2 com cap positivo, sem seleção manual. Usa o maior tier do catálogo e até 5.000 por pedido; rejeições recebem intervalo maior.",
-		"COLETA MULTIFIELD"
-	)
-	Ui.toggle(actions, "collect", "Auto collect")
-	Ui.text(actions, "Tier e quantidade são pedidos ao servidor. O retorno aparece no contador.", 12, Theme.muted).Size =
-		UDim2.new(1, 0, 0, 36)
-	local access = Ui.card(
-		parent,
-		"Menus que ficam abertos",
-		"O bloqueio é feito na função que esconde as interfaces, sem um loop de visibilidade. Abra as lojas em World 1 ou World 2."
-	)
-	Ui.button(access, "Suspender fechamento por progresso", function()
-		Game.nativeVisibility(true)
-		Ui.notify("ShowHideTabs suspensa. Abra as lojas pelas abas de world.")
+	Ui.farmButton = Ui.button(farm, "Iniciar farm", function()
+		Hub.settings.collect = not Hub.settings.collect
+		Hub.nextCollectionAt = 0
+		Ui.refresh()
 	end, true)
-end
-
-Ui.renderers["Geral/Compras"] = function(parent)
-	Ui.section(parent, "Compras sem digitar IDs")
-	local selected = Ui.card(
+	Ui.farmStatus = Ui.text(farm, "", 14, Theme.muted)
+	Ui.farmStatus.Size = UDim2.new(1, 0, 0, 44)
+	Ui.requestStats = Ui.text(farm, "", 12, Theme.accent)
+	Ui.requestStats.Size = UDim2.new(1, 0, 0, 32)
+	Ui.button(farm, "Teste único: PW8 × 100 em main", Game.testCollect100)
+	local purchases = Ui.card(
 		parent,
-		"O upgrade que você está vendo",
-		"Abra uma loja e toque em um upgrade no jogo. O hub usa a seleção do próprio jogo para comprar o máximo.",
-		"CONTEXTO DO JOGO"
+		"Upgrade selecionado",
+		"Toque em um upgrade na SurfaceGui do jogo. Os botões usam essa seleção."
 	)
-	Ui.button(selected, "Comprar máximo do selecionado", Game.buySelected, true)
-	local shop = Ui.card(
-		parent,
-		"A loja inteira",
-		"Abra uma loja pela aba do world. O painel flutuante permite comprar os upgrades dessa loja sem copiar nomes ou percorrer IDs."
-	)
-	Ui.button(shop, "Comprar máximo da última loja aberta", function()
-		Game.buyShop(Hub.nativeMenu)
-	end, true)
-	Ui.button(shop, "Abrir lojas de World 1", function()
-		Ui.navigate("World 1")
+	Ui.button(purchases, "Comprar máximo do selecionado", Game.buySelected)
+	Ui.button(purchases, "Comprar máximo dessa superfície", function()
+		Game.buyShop()
 	end)
-	Ui.button(shop, "Abrir lojas de World 2", function()
-		Ui.navigate("World 2")
+	local map = Ui.card(parent, "Restaurar", "Desfaz peças, superfícies e regras locais alteradas pelo hub.")
+	Ui.button(map, "Restaurar mapa e câmera", function()
+		Game.nativeVisibility(false)
 	end)
-end
-
-Ui.renderers["Geral/Ajustes"] = function(parent)
-	Ui.section(parent, "Movimento e interface")
-	local movement = Ui.card(
-		parent,
-		"Velocidade do personagem",
-		"Aplica ao Humanoid local e restaura o valor anterior ao fechar o hub."
-	)
-	local speed = Ui.input(movement, "Velocidade entre 16 e 300", "48")
-	Ui.button(movement, "Aplicar velocidade", function()
+	local movement = Ui.card(parent, "Velocidade")
+	local speed = Ui.input(movement, "Velocidade", "48")
+	Ui.button(movement, "Aplicar", function()
 		local value = tonumber(speed.Text)
-		assert(value and value == value and value >= 16 and value <= 300, "Velocidade: use 16 a 300")
+		assert(value and value == value and value >= 16 and value <= 300, "Use uma velocidade de 16 a 300")
 		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		assert(humanoid, "Personagem indisponível")
 		Hub.remember(humanoid, "WalkSpeed", value)
-		Ui.notify("Velocidade local: " .. value)
-	end, true)
-	local layout = Ui.card(
-		parent,
-		"Do seu jeito",
-		"Arraste pelo cabeçalho com mouse ou toque. K mostra/oculta; no celular, use o botão Froggyz. A digitação nos campos não aciona atalhos."
-	)
-	Ui.button(layout, "Centralizar janela", function()
-		Hub.dragged = false
-		Ui.window.Position = UDim2.fromScale(0.5, 0.5)
+		Ui.notify("Velocidade: " .. value)
 	end)
-	Ui.button(layout, "Restaurar visibilidade e máquinas", function()
-		Game.nativeVisibility(false)
-		Ui.notify("Regras nativas restauradas.")
-	end)
+	Ui.text(movement, "Daily + hourly + anti-AFK automáticos.", 12, Theme.accent).Size = UDim2.new(1, 0, 0, 32)
 end
 
-Ui.renderers["World 1/Acesso"] = function(parent)
-	Ui.renderAccess(parent, 1)
-end
-Ui.renderers["World 2/Acesso"] = function(parent)
-	Ui.renderAccess(parent, 2)
-end
-
-Ui.renderers["World 1/Grasslands"] = function(parent)
-	Ui.section(parent, "Grasslands")
-	local battles = Ui.card(
-		parent,
-		"Batalhas rápidas",
-		"Auto win chama a conclusão local EnemyDead quando existe uma batalha ativa. A recompensa ainda é solicitada ao servidor.",
-		"COMBATE"
-	)
-	Ui.toggle(battles, "autoWin", "Auto win")
-	Ui.button(battles, "Vencer batalha atual", function()
-		assert(Game.winBattle(), "Nenhuma batalha ativa")
-		Ui.notify("Conclusão local enviada.")
-	end)
-	Ui.button(battles, "Iniciar combate", function()
-		Game.event({ id = "startFight" })
-		Ui.notify("Início de combate solicitado.")
-	end)
-	Ui.button(battles, "Parar combate", function()
-		Game.event({ id = "stopFight" })
-		Ui.notify("Parada solicitada.")
-	end)
-	local luck = Ui.card(
-		parent,
-		"Sorte na recompensa",
-		"tempLuck é aplicada antes de concluir a batalha. O servidor pode limitar ou recalcular esse valor."
-	)
-	local input = Ui.input(luck, "Luck de 0 a 1.000.000.000", tostring(Hub.settings.luck))
-	Ui.button(luck, "Aplicar luck", function()
-		local value = tonumber(input.Text)
-		assert(value and value == value and value >= 0 and value <= 1000000000, "Luck: use 0 a 1.000.000.000")
+Ui.renderers["World 1"] = function(parent)
+	Ui.mapActions(parent, 1)
+	local surfaces =
+		Ui.card(parent, "Ver uma máquina", "Move a câmera até a superfície. Você continua usando a loja do mapa.")
+	Ui.surfaceShortcuts(surfaces, "W1", {
+		{ "Upgrades", "Upgrades" },
+		{ "Prestige", "PrestigeUpgrades" },
+		{ "Factory", "FactoryUpgrades" },
+		{ "Planetary", "Planetary" },
+		{ "Planetoids", "Planetoids" },
+		{ "Singularity", "SingularityChart" },
+	})
+	local combat = Ui.card(parent, "Grasslands")
+	Ui.toggle(combat, "autoWin", "Auto win")
+	local luck = Ui.input(combat, "tempLuck", tostring(Hub.settings.luck))
+	Ui.button(combat, "Aplicar luck", function()
+		local value = tonumber(luck.Text)
+		assert(value and value == value and value >= 0 and value <= 1000000000, "Luck inválida")
 		Hub.settings.luck = value
-		Ui.notify("Luck para próximas conclusões: " .. value)
-	end, true)
-	Ui.button(luck, "Abrir inventário", function()
-		Game.openFeature("W1", "Inventory")
+		Ui.notify("tempLuck: " .. value)
 	end)
-end
-
-Ui.renderers["World 1/Solarians"] = function(parent)
-	Ui.section(parent, "Solarians")
-	local actions = Ui.card(
-		parent,
-		"Alocação sem percorrer funções",
-		"Solicita capSol para cada função do catálogo. O servidor calcula quanto pode ser alocado; nenhum saldo é inventado.",
-		"ALOCAÇÃO"
-	)
-	Ui.button(actions, "Alocar máximo em todas as funções", Game.capSolarians, true)
-	Ui.button(actions, "Mostrar funções bloqueadas localmente", Game.exposeSolarians)
-	Ui.button(actions, "Recolher todas as unidades", function()
+	Ui.button(combat, "Vencer batalha atual", function()
+		assert(Game.winBattle(), "Nenhuma batalha ativa")
+		Ui.notify("Conclusão solicitada.")
+	end)
+	local solarians = Ui.card(parent, "Solarians")
+	Ui.button(solarians, "Alocar até o cap nas funções", Game.capSolarians)
+	Ui.button(solarians, "Recolher unidades", function()
 		Game.event({ id = "recallSol" })
 		Ui.notify("Recall solicitado.")
 	end)
-	Ui.button(actions, "Abrir painel Solarians", function()
-		Game.openFeature("Solarians", "Solarian")
-	end)
-	local access = Ui.card(
-		parent,
-		"Restoration, souls e singularity",
-		"Acesso direto às interfaces do jogo, com as regras locais de ocultação suspensas."
-	)
-	Ui.button(access, "Abrir Restoration", function()
-		Game.openFeature("Solarians", "Restoration")
-	end)
-	Ui.button(access, "Abrir Souls", function()
-		Game.openFeature("Solarians", "Souls")
-	end)
-	Ui.button(access, "Abrir Singularity Chart", function()
-		Game.openFeature("W1", "SingularityChart")
-	end)
-end
-
-Ui.renderers["World 1/Planet Run"] = function(parent)
-	Ui.section(parent, "Planet Run")
-	local bits = Ui.card(
-		parent,
-		"Bits da fase atual",
-		"Usa as posições SpawnPos já criadas pelo jogo. Cada objeto é enviado uma vez por execução do hub.",
-		"COLETA"
-	)
-	Ui.toggle(bits, "autoBits", "Auto bits")
-	Ui.button(bits, "Coletar bits agora", function()
+	Ui.surfaceShortcuts(solarians, "Solarians", { { "Solarian", "Solarian" }, { "Restoration", "Restoration" } })
+	local run = Ui.card(parent, "Planet Run")
+	Ui.toggle(run, "autoBits", "Auto bits")
+	Ui.button(run, "Coletar bits da fase", function()
 		Ui.notify(Game.collectBits() .. " bits solicitados.")
 	end)
-	local finish = Ui.card(
-		parent,
-		"Conclusão da fase",
-		"Envia stopPRTimer usando o mínimo definido no catálogo da fase. Aceitação, pré-requisitos e prêmio dependem do servidor."
-	)
-	Ui.button(finish, "Solicitar conclusão da fase atual", Game.finishRun, true)
-	Ui.button(finish, "Sair de Planet Run", function()
-		Game.event({ id = "quitPR" })
-		Ui.notify("Saída solicitada.")
-	end)
-	local starts = Ui.card(
-		parent,
-		"Escolher fase",
-		"Use o seletor do próprio jogo para entrar em uma fase; o hub cuida da coleta depois."
-	)
-	Ui.button(starts, "Abrir Planet Run", function()
-		local world = playerGui:FindFirstChild("W1")
-		local feature = world and (world:FindFirstChild("PlanetRun") or world:FindFirstChild("PR"))
-		if feature then
-			Game.openMenu(feature)
-		else
-			Game.openFeature("W1", "TheStar")
-		end
-	end)
-	Ui.button(starts, "Abrir Planetary", function()
-		Game.openFeature("W1", "Planetary")
-	end)
-	Ui.button(starts, "Abrir Planetoids", function()
-		Game.openFeature("W1", "Planetoids")
-	end)
-end
-
-Ui.renderers["World 1/Chart"] = function(parent)
-	Ui.section(parent, "Singularity e progressão")
-	local chart = Ui.card(
-		parent,
-		"Comprar nós disponíveis",
-		"Descobre os IDs internamente e solicita uma compra por nó abaixo do cap com pré-requisitos locais atendidos. Custos e desbloqueios são validados pelo jogo."
-	)
+	Ui.button(run, "Solicitar conclusão da fase", Game.finishRun)
+	local chart = Ui.card(parent, "Chart")
 	Ui.button(chart, "Comprar nós disponíveis de World 1", function()
 		Game.chartBuy(1)
-	end, true)
-	Ui.button(chart, "Abrir Singularity Chart", function()
-		Game.openFeature("W1", "SingularityChart")
 	end)
-	local progression = Ui.card(
-		parent,
-		"Acesso à progressão",
-		"Resets ficam manuais no menu do jogo, para você conferir custos e perdas antes de confirmar."
-	)
-	for _, name in ipairs({ "Planetary", "Supernova", "Constellation", "DarkMatter", "StarChart" }) do
-		Ui.button(progression, "Abrir " .. name, function()
-			Game.openFeature("W1", name)
-		end)
-	end
 end
 
-Ui.renderers["World 2/Templo"] = function(parent)
-	Ui.section(parent, "Templo e progressão")
-	local chart = Ui.card(
-		parent,
-		"Temple Chart",
-		"Compra os nós de World 2 sem exigir IDs. Os pedidos respeitam os pré-requisitos conhecidos pelo cliente."
-	)
-	Ui.button(chart, "Comprar nós disponíveis do templo", function()
+Ui.renderers["World 2"] = function(parent)
+	Ui.mapActions(parent, 2)
+	local surfaces = Ui.card(parent, "Ver uma máquina", "Foca a SurfaceGui no mapa; não abre todas as interfaces.")
+	Ui.surfaceShortcuts(surfaces, "W2", {
+		{ "Upgrades", "Upgrades" },
+		{ "Opal", "OpalUpgrades" },
+		{ "Bulb", "BulbUpgrades" },
+		{ "Temple", "TempleUpgrades" },
+		{ "Gauntlet", "Gauntlet" },
+		{ "Artefatos", "Artifacts" },
+	})
+	local chart = Ui.card(parent, "Temple Chart")
+	Ui.button(chart, "Comprar nós disponíveis", function()
 		Game.chartBuy(2)
-	end, true)
-	Ui.button(chart, "Abrir Temple Upgrades", function()
-		Game.openFeature("W2", "TempleUpgrades")
 	end)
-	local progression = Ui.card(
-		parent,
-		"Máquinas de World 2",
-		"Abra cada sistema diretamente, com a função de ocultação suspensa."
-	)
-	for _, name in ipairs({
-		"OpalUpgrades",
-		"BulbUpgrades",
-		"TreeReset",
-		"TempleReset",
-		"Creation",
-		"Regeneration",
-		"RemnantUpgrades",
-		"RiftGenerator",
-	}) do
-		Ui.button(progression, "Abrir " .. name, function()
-			Game.openFeature("W2", name)
-		end)
-	end
-end
-
-Ui.renderers["World 2/Gauntlet"] = function(parent)
-	Ui.section(parent, "Gauntlet")
-	local room = Ui.card(
-		parent,
-		"Sala máxima disponível",
-		"Usa os comandos encontrados na interface nativa. Não pressupõe que o servidor aceite salas ou áreas bloqueadas."
-	)
-	Ui.button(room, "Ir para a maior sala disponível", function()
+	local gauntlet = Ui.card(parent, "Gauntlet")
+	Ui.button(gauntlet, "Maior sala disponível", function()
 		Game.event({ id = "gauntletRoomMax", increase = true })
 		Ui.notify("Sala máxima solicitada.")
-	end, true)
-	Ui.button(room, "Voltar à menor sala", function()
+	end)
+	Ui.button(gauntlet, "Menor sala disponível", function()
 		Game.event({ id = "gauntletRoomMax", increase = false })
 		Ui.notify("Sala mínima solicitada.")
-	end)
-	Ui.button(room, "Abrir Gauntlet", function()
-		Game.openFeature("W2", "Gauntlet")
-	end)
-	local areas = Ui.card(parent, "Áreas e artefatos", "Use o seletor nativo para trocar de área, sem copiar IDs.")
-	Ui.button(areas, "Escolher área", function()
-		Game.openFeature("W2", "GauntletAreas")
-	end)
-	Ui.button(areas, "Abrir artefatos", function()
-		Game.openFeature("W2", "Artifacts")
 	end)
 end
 
@@ -1540,15 +1484,6 @@ function Hub.shutdown()
 		return
 	end
 	Hub.alive = false
-	if Hub.idleHeld then
-		pcall(function()
-			VirtualUser:Button2Up(
-				Vector2.zero,
-				workspace.CurrentCamera and workspace.CurrentCamera.CFrame or CFrame.new()
-			)
-		end)
-		Hub.idleHeld = false
-	end
 	for _, connection in ipairs(Hub.connections) do
 		connection:Disconnect()
 	end
@@ -1560,22 +1495,46 @@ function Hub.shutdown()
 			pcall(task.cancel, thread)
 		end
 	end
+	if Hub.idleHeld then
+		pcall(function()
+			VirtualUser:Button2Up(
+				Vector2.zero,
+				workspace.CurrentCamera and workspace.CurrentCamera.CFrame or CFrame.new()
+			)
+		end)
+		Hub.idleHeld = false
+	end
+	local failures = {}
+	local cameraOk, cameraError = pcall(Game.restoreCamera)
+	if not cameraOk then
+		table.insert(failures, tostring(cameraError))
+	end
+	local _, mapErrors = Game.restoreMachines()
+	for _, message in ipairs(mapErrors) do
+		table.insert(failures, message)
+	end
+	local _, propertyErrors = Game.restoreScope(Hub.mapProperties)
+	for _, message in ipairs(propertyErrors) do
+		table.insert(failures, message)
+	end
 	Hub.restorePatches()
-	Game.restoreMachines()
-	for object, properties in pairs(Hub.properties) do
-		if object.Parent then
-			for property, state in pairs(properties) do
-				pcall(function()
-					object[property] = state.value
-				end)
-			end
+	local _, generalErrors = Game.restoreScope(Hub.properties)
+	for _, message in ipairs(generalErrors) do
+		table.insert(failures, message)
+	end
+	local state = Hub.visibilityState
+	if state then
+		if state.manager.ShowHideTabs == state.replacement then
+			state.manager.ShowHideTabs = state.original
+		end
+		Hub.visibilityState = nil
+		local ok, message = pcall(state.manager.ShowHideTabs)
+		if not ok then
+			table.insert(failures, tostring(message))
 		end
 	end
-	local manager = Hub.modules.TabManager
-	if manager then
-		task.defer(function()
-			pcall(manager.ShowHideTabs)
-		end)
+	if #failures > 0 then
+		warn("Froggyz: restauração incompleta: " .. table.concat(failures, " | "))
 	end
 end
 
@@ -1603,7 +1562,7 @@ Hub.connect(player.Idled, function()
 	end)
 end)
 
-Hub.job("collection", 0.2, Game.collectAll)
+Hub.job("collection", 0.05, Game.collectAll)
 Hub.job("rewards", 30, Game.claimRewards)
 Hub.job("battles", 0.2, function()
 	if Hub.settings.autoWin then
@@ -1615,16 +1574,7 @@ Hub.job("bits", 2, function()
 		Game.collectBits()
 	end
 end)
-Hub.job("summary", 1, function()
-	if Ui.summary and Ui.summary.Parent then
-		Ui.summary.Text = Hub.stats.fields
-			.. " fields  ·  "
-			.. Hub.stats.accepted
-			.. " retornos positivos  ·  "
-			.. Hub.stats.rejected
-			.. " recusas/erros"
-	end
-end)
+Hub.job("summary", 0.25, Ui.refresh)
 
 Hub.connect(RunService.Heartbeat, function()
 	if not Hub.alive then

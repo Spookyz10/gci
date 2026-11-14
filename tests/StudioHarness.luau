@@ -1,87 +1,61 @@
 return function(runHub)
-	local testRoot = Instance.new("Folder")
-	testRoot.Name = "FroggyzTests"
+	local root = Instance.new("Folder")
+	root.Name = "FroggyzTests"
 	local function make(className, name, parent)
 		local object = Instance.new(className)
 		object.Name = name
 		object.Parent = parent
 		return object
 	end
-	local playerGui = make("Folder", "PlayerGui", testRoot)
-	local firstWorld = make("ScreenGui", "W1", playerGui)
-	local secondWorld = make("ScreenGui", "W2", playerGui)
-	local feature = make("Frame", "PrestigeUpgrades", firstWorld)
-	local shop = make("Frame", "ShopContainer", feature)
-	local locked = make("Frame", "Locked", feature)
-	local firstUpgrade = make("Frame", "UpgradeA", shop)
-	local secondUpgrade = make("Frame", "UpgradeB", shop)
-	local otherShop = make("Frame", "ShopContainer", make("Frame", "OpalUpgrades", secondWorld))
-	local foreignUpgrade = make("Frame", "UpgradeC", otherShop)
-	local features = make("Folder", "Features", testRoot)
-	local hiddenMachine = make("Model", "HiddenMachine", features)
-	local machinePart = make("Part", "Base", hiddenMachine)
-	machinePart.Anchored = true
-	machinePart.Size = Vector3.new(20, 20, 20)
-	machinePart.CFrame = CFrame.new(0, 200000, 0)
-	local surface = make("SurfaceGui", "Display", machinePart)
-	surface.Enabled = false
-	local originalPivot = hiddenMachine:GetPivot()
-	local nativeMachine = make("Model", "AutomationShop", features)
-	local nativePart = make("Part", "Base", nativeMachine)
-	nativePart.Anchored = true
-	nativePart.CFrame = CFrame.new(0, 200000, 0)
-	local door = make("Model", "LockedDoor", features)
-	local doorPart = make("Part", "Base", door)
+	local playerGui = make("Folder", "PlayerGui", root)
+	local w1 = make("SurfaceGui", "W1", playerGui)
+	local w2 = make("SurfaceGui", "W2", playerGui)
+	w1.Enabled = false
+	local features = make("Folder", "Features", root)
+	local automation = make("Model", "AutomationShop", features)
+	local part = make("Part", "Interface", automation)
+	part.Anchored = true
+	part.Size = Vector3.new(12, 8, 1)
+	part.CFrame = CFrame.new(0, 200000, 0)
+	local door = make("Model", "LockedDoor", automation)
+	local doorPart = make("Part", "Door", door)
 	doorPart.Anchored = true
-	doorPart.CFrame = CFrame.new(10, 5, 10)
-	local worldTwoFeatures = make("Folder", "W2", features)
-	local realFeatures = make("Folder", "Real", features)
-	local otherMachine = make("Model", "AutomationShop", realFeatures)
-	local otherMachinePart = make("Part", "Base", otherMachine)
-	otherMachinePart.Anchored = true
-	otherMachinePart.CFrame = CFrame.new(0, 200000, 0)
-	local secondMachine = make("Model", "SecondMachine", worldTwoFeatures)
-	local secondPart = make("Part", "Base", secondMachine)
-	secondPart.Anchored = true
-	secondPart.CFrame = CFrame.new(0, 200000, 0)
-	local events = {}
-	local cuts = {}
-	local idleCalls = 0
-	local nativeCalls = 0
-	local api
-	local checks = {}
-	local function check(condition, name)
-		assert(condition, name)
-		table.insert(checks, name)
-	end
+	doorPart.CFrame = CFrame.new(5, 200008, 0)
+	local partOriginal, doorOriginal = part.CFrame, doorPart.CFrame
+	local unknown = make("Model", "UnknownMachine", features)
+	local unknownPart = make("Part", "Base", unknown)
+	unknownPart.Anchored = true
+	unknownPart.CFrame = CFrame.new(20, 200000, 0)
+	local w2Features = make("Folder", "W2", features)
+	local w2Machine = make("Model", "Stability", w2Features)
+	local w2Part = make("Part", "Base", w2Machine)
+	w2Part.Anchored = true
+	w2Part.CFrame = CFrame.new(0, 200000, 0)
+	local surface = make("SurfaceGui", "Upgrades", w1)
+	surface.Adornee = part
+	surface.Enabled = false
+	local alternate = make("SurfaceGui", "AutomationUpgrades", w1)
+	alternate.Adornee = part
+	local shop = make("Frame", "ShopContainer", surface)
+	local otherShop = make("Frame", "ShopContainer", alternate)
+	local lock = make("Frame", "Locked", surface)
+	local upgradeA = make("Frame", "UpgradeA", shop)
+	local upgradeB = make("Frame", "UpgradeB", shop)
+	local upgradeC = make("Frame", "UpgradeC", otherShop)
 	local signals = {}
 	for _, name in ipairs({ "Heartbeat", "Idled", "InputBegan", "InputChanged", "InputEnded" }) do
-		signals[name] = make("BindableEvent", name, testRoot)
+		signals[name] = make("BindableEvent", name, root)
 	end
-	local player = { Idled = signals.Idled.Event, Character = make("Model", "Character", testRoot) }
-	local humanoid = make("Humanoid", "Humanoid", player.Character)
+	local character = make("Model", "Character", root)
+	local humanoid = make("Humanoid", "Humanoid", character)
 	humanoid.WalkSpeed = 16
-	function player:WaitForChild(name)
-		assert(name == "PlayerGui")
-		return playerGui
-	end
-	local fields = {
-		main = {
-			world = 1,
-			max = 120,
-			growSpeed = 4,
-			defaultId = "tier",
-			spawnArea = { x = Vector2.new(-50, 50), z = Vector2.new(-50, 50), y = 0 },
-		},
-		anti = { world = 1, max = 9000, defaultId = "basic" },
-		jungle = {
-			world = 2,
-			max = 200,
-			defaultId = "tier2",
-			spawnArea = { x = Vector2.new(1000, 1100), z = Vector2.new(-50, 50), y = 0 },
-		},
-		locked = { world = 2, max = 0, defaultId = "basic" },
-		otherWorld = { world = 8, max = 50, defaultId = "basic" },
+	local player = {
+		Character = character,
+		Idled = signals.Idled.Event,
+		WaitForChild = function(_, name)
+			assert(name == "PlayerGui")
+			return playerGui
+		end,
 	}
 	local stats = {
 		slotLoaded = true,
@@ -92,33 +66,51 @@ return function(runHub)
 		upgradeSelected = "a",
 		planetRun = "normal",
 		planetRunLevel = 1,
-		prTimerClient = 1,
+		prTimerClient = 0,
 	}
-	local nativeFunction = function()
+	local upgrades = { decelerator = { level = 0 }, recelerator = { level = 0 }, bridge2 = { level = 0 } }
+	local fields = {
+		main = { world = 1, max = 120, counter = 50, defaultId = "tier", growSpeed = 1 },
+		anti = { world = 1, max = 9000, counter = 100, defaultId = "tier", growSpeed = 10 },
+		planet = { world = 1, max = 900, counter = 100, defaultId = "basic" },
+		un = { world = 1, max = 500, counter = 100, defaultId = "basic" },
+		jungle = { world = 2, max = 200, counter = 100, defaultId = "tier2" },
+		cavern = { world = 2, max = 600, counter = 100, defaultId = "basic" },
+		locked = { world = 1, max = 800, counter = 100, unlocked = false },
+	}
+	local nativeCalls = 0
+	local native = function()
 		nativeCalls += 1
 	end
 	local modules = {
-		Data = { ImportantData = { Stats = stats } },
+		Data = { ImportantData = { Stats = stats, UpgradeLevels = { generic = upgrades, upgrades = {} } } },
 		Fields = { Fields = fields },
-		GrassTypes = { Types = { basic = { nextTier = "pale" }, pale = { nextTier = "top" }, top = {} } },
-		TabManager = { ShowHideTabs = nativeFunction, menus = {} },
-		Upgrades = {
-			Basic = { a = { object = firstUpgrade }, b = { object = secondUpgrade }, c = { object = foreignUpgrade } },
-		},
-		PlanetRun = { BitsCreated = {}, Levels = { normal = { levels = { ["1"] = { minTime = 20000 } } } } },
-		Solarians = { Bars = { sol = {
-			unlockCondition = function()
+		InfoStore = { Resets = {} },
+		MapTeles = { Teles = { field2 = {
+			visibleConditionC = function()
 				return false
 			end,
-		}, ll = {} } },
-		SingularityChart = {
-			Upgrades = {
-				sol = { world = 1, level = 0, levelCap = 1, prereqs = {} },
-				blocked = { world = 1, level = 0, prereqs = { "sol" } },
-				temple = { world = 2, level = 0, prereqs = {} },
-			},
-		},
+		} } },
+		TabManager = { ShowHideTabs = native },
+		Upgrades = { Basic = { a = { object = upgradeA }, b = { object = upgradeB }, c = { object = upgradeC } } },
+		Solarians = { Bars = { sol = {} } },
+		PlanetRun = { BitsCreated = {}, Levels = { normal = { levels = { ["1"] = { minTime = 20000 } } } } },
+		SingularityChart = { Upgrades = {} },
 		GalaxyGen = { CombatState = { fighting = false, playerStats = { tempLuck = 0 } } },
+	}
+	local cuts, events, active, maxActive, idleCalls = {}, {}, 0, 0, 0
+	local remoteFunction = {
+		IsA = function(_, className)
+			return className == "RemoteFunction"
+		end,
+		InvokeServer = function(_, payload)
+			active += 1
+			maxActive = math.max(maxActive, active)
+			table.insert(cuts, payload)
+			task.wait(0.04)
+			active -= 1
+			return payload.identifier ~= "pw8"
+		end,
 	}
 	local remoteEvent = {
 		IsA = function(_, className)
@@ -128,19 +120,9 @@ return function(runHub)
 			table.insert(events, payload)
 		end,
 	}
-	local remoteFunction = {
-		IsA = function(_, className)
-			return className == "RemoteFunction"
-		end,
-		InvokeServer = function(_, payload)
-			table.insert(cuts, payload)
-			task.wait(0.03)
-			return payload.field ~= "anti"
-		end,
-	}
 	local remotes = {
 		FindFirstChild = function(_, name)
-			return name == "GenericEvent" and remoteEvent or name == "GenericFunction" and remoteFunction
+			return name == "GenericFunction" and remoteFunction or name == "GenericEvent" and remoteEvent
 		end,
 	}
 	local replicatedStorage = {
@@ -158,11 +140,18 @@ return function(runHub)
 			end
 		end,
 	}
+	local camera = {
+		ViewportSize = Vector2.new(360, 760),
+		CFrame = CFrame.new(20, 30, 40),
+		Focus = CFrame.new(),
+		CameraType = Enum.CameraType.Custom,
+		CameraSubject = humanoid,
+	}
+	local originalCamera = camera.CFrame
 	local services = {
 		Players = { LocalPlayer = player },
 		ReplicatedStorage = replicatedStorage,
 		RunService = { Heartbeat = signals.Heartbeat.Event },
-		TweenService = {},
 		UserInputService = {
 			InputBegan = signals.InputBegan.Event,
 			InputChanged = signals.InputChanged.Event,
@@ -191,146 +180,220 @@ return function(runHub)
 			end,
 		},
 		workspace = {
-			CurrentCamera = { ViewportSize = Vector2.new(360, 760), CFrame = CFrame.new() },
+			CurrentCamera = camera,
 			FindFirstChild = function(_, name)
-				return testRoot:FindFirstChild(name)
+				return root:FindFirstChild(name)
 			end,
 		},
 		require = function(object)
 			return modules[object.Name]
 		end,
 	}
+	local api
+	local layoutPart
+	local cases = {}
+	local function check(condition, name)
+		assert(condition, name)
+		table.insert(cases, name)
+	end
+	local function runCollect()
+		api.Hub.nextCollectionAt = 0
+		api.Game.collectAll()
+	end
 	local ok, message = pcall(function()
 		api = runHub(environment)
-		task.wait()
-		check(api.Ui.root.Parent == playerGui, "UI construída")
-		api.Ui.resize(Vector2.new(360, 760))
-		check(api.Ui.window.Size.X.Offset == 340 and api.Ui.window.Size.Y.Offset == 700, "Layout de telefone 360 x 760")
-		api.Ui.resize(Vector2.new(844, 350))
-		check(api.Ui.window.Size.Y.Offset == 322, "Layout horizontal curto")
-		for _, pair in ipairs({
-			{ "Geral", "Início" },
-			{ "Geral", "Compras" },
-			{ "Geral", "Ajustes" },
-			{ "World 1", "Acesso" },
-			{ "World 1", "Grasslands" },
-			{ "World 1", "Solarians" },
-			{ "World 1", "Planet Run" },
-			{ "World 1", "Chart" },
-			{ "World 2", "Acesso" },
-			{ "World 2", "Templo" },
-			{ "World 2", "Gauntlet" },
-		}) do
-			api.Ui.navigate(pair[1], pair[2])
-			task.wait()
-			check(api.Ui.body:FindFirstChildOfClass("Frame") ~= nil, "Seção " .. pair[1] .. "/" .. pair[2])
+		check(api.Ui.subnav == nil, "Apenas três abas; sem navegação aninhada")
+		for _, page in ipairs({ "Geral", "World 1", "World 2" }) do
+			api.Ui.navigate(page)
+			check(api.Ui.body:FindFirstChildOfClass("Frame") ~= nil, "Conteúdo de " .. page)
 		end
-		api.Game.nativeVisibility(true)
-		modules.TabManager.ShowHideTabs()
-		check(nativeCalls == 0 and not locked.Visible, "Ocultação cancelada na função")
-		api.Game.nativeVisibility(true)
-		check(#api.Hub.patches == 1, "Patch idempotente")
-		api.Game.openMenu(shop)
-		check(shop.Visible and not api.Ui.window.Visible and api.Ui.context.Visible, "Loja com ações contextuais")
-		api.Game.buyShop(shop)
+		api.Ui.navigate("Geral")
+		api.Ui.resize(Vector2.new(360, 760))
+		check(api.Ui.window.Size.X.Offset == 340 and api.Ui.window.Size.Y.Offset == 720, "Janela de telefone")
+		check(api.Ui.body.Position.Y.Offset == 132, "Mais área útil para conteúdo")
+		layoutPart = Instance.new("Part")
+		layoutPart.Name = "FroggyzLayoutTest"
+		layoutPart.Anchored = true
+		layoutPart.CanCollide = false
+		layoutPart.CFrame = CFrame.new(0, 100000, 0)
+		local layoutSurface = Instance.new("SurfaceGui")
+		layoutSurface.CanvasSize = Vector2.new(360, 760)
+		layoutSurface.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+		layoutSurface.Adornee = layoutPart
+		layoutSurface.Parent = layoutPart
+		local canvas = api.Ui.canvas:Clone()
+		canvas.Window.Visible = true
+		canvas.Parent = layoutSurface
+		layoutPart.Parent = workspace
+		task.wait(0.1)
+		local modePositions = {}
+		for _, object in ipairs(canvas:GetDescendants()) do
+			if
+				object:IsA("TextButton")
+				and (object.Text == "PW8" or object.Text == "Platinum" or object.Text == "Moonstone")
+			then
+				modePositions[object.Text] = object.AbsolutePosition
+			end
+		end
 		check(
-			#events == 2 and events[1].upgradeId == "a" and events[2].upgradeId == "b",
-			"Compra somente da loja aberta"
+			modePositions.PW8.Y == modePositions.Platinum.Y
+				and modePositions.PW8.Y == modePositions.Moonstone.Y
+				and modePositions.Moonstone.X > modePositions.Platinum.X,
+			"Três modos na mesma linha em telefone real"
+		)
+		layoutPart:Destroy()
+		layoutPart = nil
+		api.Ui.beginDrag({ UserInputType = Enum.UserInputType.MouseButton1, Position = Vector3.zero })
+		api.Ui.moveDrag({ UserInputType = Enum.UserInputType.MouseMovement, Position = Vector3.new(15, 20, 0) })
+		check(api.Hub.dragged == true, "Arrastar com mouse")
+		api.Hub.drag = nil
+		local touch = { UserInputType = Enum.UserInputType.Touch, Position = Vector3.zero }
+		api.Ui.beginDrag(touch)
+		touch.Position = Vector3.new(25, 40, 0)
+		api.Ui.moveDrag(touch)
+		check(api.Hub.dragged and api.Hub.drag.input == touch, "Arrastar com toque")
+		local before = api.Ui.window.Visible
+		signals.InputBegan:Fire({ KeyCode = Enum.KeyCode.K }, false)
+		check(api.Ui.window.Visible ~= before, "Atalho K")
+		local unlocked = api.Game.unlockedFields()
+		check(#unlocked == 1 and unlocked[1].id == "main", "Cap positivo não libera fields bloqueados")
+		api.Hub.settings.collect = true
+		api.Game.setFarmMode("pw8")
+		runCollect()
+		check(#cuts == 1 and cuts[1].identifier == "pw8" and cuts[1].quantity == 120, "PW8 fixo com lote maior")
+		check(cuts[1].field == "main", "Sem envio a anti bloqueado ou outro world")
+		api.Game.setFarmMode("platinum")
+		runCollect()
+		check(
+			cuts[#cuts].field == "main" and cuts[#cuts].identifier == "platinum" and cuts[#cuts].quantity == 1,
+			"Platinum em main quando anti bloqueado"
+		)
+		upgrades.decelerator.level = 1
+		runCollect()
+		check(cuts[#cuts].field == "anti" and cuts[#cuts].quantity == 1, "Platinum prefere anti liberado com grama")
+		api.Game.setFarmMode("moonstone")
+		runCollect()
+		check(
+			cuts[#cuts].field == "anti" and cuts[#cuts].identifier == "moonstone" and cuts[#cuts].quantity == 1,
+			"Moonstone em anti com quantidade um"
+		)
+		fields.anti.counter = 0
+		runCollect()
+		check(cuts[#cuts].field == "main", "Fallback para main quando anti está vazio")
+		fields.anti.counter = 100
+		api.Game.setFarmMode("pw8")
+		api.Hub.nextCollectionAt = 0
+		local count = #cuts
+		task.defer(api.Game.collectAll)
+		task.wait(0.01)
+		check(api.Hub.pendingRequest ~= nil, "Pedido pendente registrado")
+		api.Game.setFarmMode("moonstone")
+		api.Game.collectAll()
+		check(#cuts == count + 1, "Trocar modo não intercala pedidos")
+		task.wait(0.06)
+		runCollect()
+		check(maxActive == 1 and cuts[#cuts].identifier == "moonstone", "Somente um farm e um pedido ativos")
+		stats.world = 2
+		count = #cuts
+		runCollect()
+		check(#cuts == count, "Especiais não rodam em World 2")
+		api.Game.setFarmMode("pw8")
+		runCollect()
+		check(cuts[#cuts].field == "jungle" and cuts[#cuts].identifier == "pw8", "PW8 usa fields liberados de World 2")
+		upgrades.bridge2.level = 1
+		check(api.Game.fieldUnlocked("cavern", fields.cavern), "Cavern liberada por progresso real")
+		stats.world = 1
+		api.Hub.settings.collect = false
+		local probeOk, probeResult = api.Game.testCollect100()
+		check(
+			probeOk
+				and probeResult == false
+				and cuts[#cuts].field == "main"
+				and cuts[#cuts].identifier == "pw8"
+				and cuts[#cuts].quantity == 100,
+			"Teste de 100 mostra retorno falso sem fingir sucesso"
 		)
 		api.Game.buySelected()
-		check(events[#events].upgradeId == "a", "Compra da seleção nativa")
-		api.Hub.settings.collect = true
-		api.Game.collectAll()
-		api.Game.collectAll()
-		task.wait(0.12)
-		check(#cuts == 3, "Coleta de todos os fields sem duplicar pedidos pendentes")
-		local byField = {}
-		for _, payload in ipairs(cuts) do
-			byField[payload.field] = payload
-		end
-		check(byField.main.quantity == 120 and byField.main.identifier == "top", "Cap e maior tier em World 1")
-		check(byField.jungle.quantity == 200 and byField.jungle.identifier == "top", "World 2 coletado sem seleção")
-		check(byField.anti.quantity == 5000 and api.Hub.stats.rejected == 1, "Limite de lote e recusa contabilizada")
-		check(api.Hub.collectedFields.anti > os.clock() + 1, "Backoff para field recusado")
-		local eventCount = #events
-		api.Game.claimRewards()
+		api.Game.buyShop()
 		check(
-			#events == eventCount + 2
-				and events[eventCount + 1].id == "dailyReward"
-				and events[eventCount + 2].id == "hourlyReward",
-			"Daily e hourly automáticos"
+			events[#events].upgradeId == "b" and events[#events - 1].upgradeId == "a",
+			"Compra pela SurfaceGui da seleção"
 		)
-		stats.dailyTimeRemaining = 90000
-		stats.hourlyTimeRemaining = 500
-		eventCount = #events
-		api.Game.claimRewards()
-		check(#events == eventCount, "Resgates aguardam elegibilidade")
-		signals.Idled:Fire()
-		task.wait(0.1)
-		check(idleCalls == 3, "Anti-AFK automático")
-		local visible = api.Ui.window.Visible
-		signals.InputBegan:Fire({ KeyCode = Enum.KeyCode.K }, false)
-		check(api.Ui.window.Visible ~= visible, "K alterna visibilidade")
-		signals.InputBegan:Fire({ KeyCode = Enum.KeyCode.K }, true)
-		check(api.Ui.window.Visible ~= visible, "K respeita entrada consumida")
-		api.Game.finishRun()
-		check(
-			events[#events].id == "stopPRTimer" and events[#events].timer == 20000,
-			"Planet Run usa mínimo do catálogo"
-		)
-		api.Game.chartBuy(1)
-		check(events[#events].id == "buySC" and events[#events].scId == "sol", "Chart filtra world e pré-requisitos")
 		api.Game.revealMachines(1)
 		check(
-			hiddenMachine:GetPivot().Position.Y < 100000
-				and secondMachine:GetPivot().Position.Y > 100000
-				and otherMachine:GetPivot().Position.Y > 100000,
-			"Máquinas separadas por world"
+			(automation:GetPivot().Position - api.Game.machinePositions[1].AutomationShop.Position).Magnitude < 0.1,
+			"Máquina na posição original conhecida"
 		)
-		api.Game.revealMachines(2)
-		check(secondMachine:GetPivot().Position.Y < 100000, "Máquinas World 2 expostas")
+		check(unknownPart.Position.Y == 200000, "Máquina sem posição não é realocada")
+		api.Game.openFeature("W1", "Upgrades")
 		check(
-			(nativeMachine:GetPivot().Position - Vector3.new(-206.75, -12.251, -0.126)).Magnitude < 0.01,
-			"Máquinas mapeadas na posição original"
+			camera.CameraType == Enum.CameraType.Scriptable and surface.Enabled and not alternate.Enabled,
+			"Foco em SurfaceGui sem sobrepor a outra face"
+		)
+		check(
+			shop.Visible and otherShop.Visible and shop.Parent == surface and otherShop.Parent == alternate,
+			"Lojas não são janelas abertas ou reparentadas"
+		)
+		api.Game.restoreCamera()
+		check(
+			camera.CameraType == Enum.CameraType.Custom and camera.CFrame == originalCamera and alternate.Enabled,
+			"Câmera e superfície anterior restauradas"
 		)
 		api.Game.removeBarriers(1)
-		check(door:GetPivot().Position.Y > 100000, "Barreiras locais removidas")
-		api.Game.exposeSolarians()
-		check(modules.Solarians.Bars.sol.unlockCondition(), "Funções Solarians expostas localmente")
-		api.Hub.settings.collect = false
-		stats.dailyTimeRemaining = 86400
-		stats.hourlyTimeRemaining = 0
-		eventCount = #events
+		check(door:GetPivot().Position.Y > 100000, "Barreira aninhada ocultada")
+		api.Game.nativeVisibility(false)
+		check(
+			part.CFrame == partOriginal and doorPart.CFrame == doorOriginal,
+			"Peças de modelos aninhados restauradas exatamente"
+		)
+		check(
+			not surface.Enabled and not w1.Enabled and lock.Visible and modules.TabManager.ShowHideTabs == native,
+			"SurfaceGuis, locks e função restaurados"
+		)
+		local broken = setmetatable({ Parent = root }, {
+			__newindex = function()
+				error("falha simulada")
+			end,
+		})
+		api.Hub.mapParts[broken] = CFrame.new()
+		local restored, failures = api.Game.restoreMachines()
+		check(
+			restored == 0 and #failures == 1 and api.Hub.mapParts[broken] ~= nil,
+			"Falha de restauração é preservada para nova tentativa"
+		)
+		api.Hub.mapParts[broken] = nil
+		local eventCount = #events
 		signals.Heartbeat:Fire()
+		task.wait(0.05)
+		check(#events == eventCount + 2, "Daily e hourly automáticos")
+		signals.Idled:Fire()
 		task.wait(0.08)
-		check(#events == eventCount + 2, "Scheduler resgata sem ativação manual")
-		api.Hub.remember(humanoid, "WalkSpeed", 90)
+		check(idleCalls == 3, "Anti-AFK automático")
+		api.Hub.remember(humanoid, "WalkSpeed", 80)
+		api.Game.revealMachines(1)
 		api.Ui.root:Destroy()
 		check(
-			not api.Hub.alive and humanoid.WalkSpeed == 16 and locked.Visible,
-			"Encerrar restaura estado e velocidade"
-		)
-		check(modules.TabManager.ShowHideTabs == nativeFunction, "Função original restaurada")
-		check(
-			not modules.Solarians.Bars.sol.unlockCondition() and door:GetPivot().Position.Y == 5,
-			"Condições Solarians e barreiras restauradas"
-		)
-		check(
-			(hiddenMachine:GetPivot().Position - originalPivot.Position).Magnitude < 0.01 and not surface.Enabled,
-			"Máquinas e displays restaurados"
+			not api.Hub.alive
+				and part.CFrame == partOriginal
+				and doorPart.CFrame == doorOriginal
+				and humanoid.WalkSpeed == 16,
+			"Fechar desfaz alterações"
 		)
 		for _, connection in ipairs(api.Hub.connections) do
-			assert(not connection.Connected, "Conexão global ativa após encerrar")
+			assert(not connection.Connected)
 		end
 		for _, connection in ipairs(api.Hub.pageConnections) do
-			assert(not connection.Connected, "Conexão de página ativa após encerrar")
+			assert(not connection.Connected)
 		end
-		check(true, "Todas as conexões encerradas")
+		check(true, "Conexões encerradas")
 	end)
 	if api and api.Hub.alive then
 		api.Ui.root:Destroy()
 	end
-	testRoot:Destroy()
+	if layoutPart then
+		layoutPart:Destroy()
+	end
+	root:Destroy()
 	assert(ok, message)
-	return { passed = true, checks = #checks, cases = checks, requests = #cuts }
+	return { passed = true, checks = #cases, cases = cases, maxConcurrentRequests = maxActive }
 end

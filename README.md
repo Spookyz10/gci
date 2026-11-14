@@ -1,86 +1,77 @@
 # Froggyz Hub
 
-Hub Luau independente, com foco em World 1 e World 2. Interface responsiva,
-navegação por sistema, busca de máquinas e compras pelo contexto do jogo.
+Hub Luau para World 1 e World 2, com três abas diretas e suporte a mouse e toque.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Spookyz10/gci/main/src/FroggyzHub.client.luau"))()
 ```
 
-O carregador requer `game:HttpGet` e `loadstring` disponíveis no ambiente.
-No próprio projeto do Studio, o conteúdo de `src/FroggyzHub.client.luau` também
-pode ser usado como LocalScript em StarterPlayerScripts.
+K mostra ou oculta o hub. Arraste pelo cabeçalho. O botão Froggyz funciona no
+telefone. Fechar pelo × encerra eventos e tarefas e desfaz as alterações locais.
 
-## Interface
+## Farm
 
-- **K** mostra ou oculta a janela; o botão Froggyz funciona no telefone.
-- Arraste pelo cabeçalho com mouse ou toque. A janela fica dentro da tela.
-- Geral reúne automações, compras e ajustes. As abas de world têm seções por sistema.
-- Ao abrir uma loja nativa, o hub sai da frente e oferece compras num painel flutuante.
-- Fechar pelo **×** encerra tarefas, desconecta eventos e restaura mudanças locais.
+O seletor possui exatamente três modos, mutuamente exclusivos:
 
-## Geral
+| Modo | Identifier | Quantidade | Field |
+| --- | --- | --- | --- |
+| PW8 | `pw8` | Cap do field, até 5000 | Rodízio entre fields liberados do world atual |
+| Platinum | `platinum` | Sempre 1 | Anti liberado com grama; senão main |
+| Moonstone | `moonstone` | Sempre 1 | Anti liberado com grama; senão main |
 
-- Daily e hourly são solicitados automaticamente quando os timers locais indicam
-  elegibilidade, com verificação a cada 30 segundos e após carregar o save.
-- Anti-AFK conecta ao evento Idled automaticamente. Ambientes que bloqueiam
-  VirtualUser exibem uma mensagem de falha.
-- Auto collect percorre os fields de World 1 e World 2, além dos compartilhados,
-  com cap positivo. Não exige selecionar campo. O lote usa o cap atualizado,
-  limitado a 5000; o tier segue a cadeia `nextTier` do catálogo.
-- Cada field tem no máximo um pedido pendente. Retornos positivos permitem
-  novo pedido após 0,2 s desde o anterior; recusas e erros aguardam 2 segundos.
-- Compras usam o upgrade selecionado no jogo ou os objetos da loja aberta.
-  Não é preciso conhecer IDs. Compras em grupo têm intervalo de 0,1 s.
-- Velocidade local configurável, com restauração do valor anterior.
+O tier PW8 é fixo e não depende do tier do jogador. A verificação de progresso
+se aplica à liberação dos fields. Cap positivo, sozinho, não libera um field:
+o hub consulta upgrades, resets e condições de acesso encontradas no cliente.
+Quando não consegue confirmar uma área, não envia para ela.
 
-## Acesso e máquinas
+Platinum e Moonstone usam World 1. Existe no máximo um InvokeServer pendente.
+Trocar de modo espera esse pedido terminar antes de enviar o próximo. PW8 tem
+cadência de 0,2 s e especiais de 0,08 s, limitados também pela resposta do servidor.
+O painel distingue pedidos enviados, retornos positivos e recusas/erros.
 
-O jogo usa `TabManager.ShowHideTabs()` para esconder interfaces e mover
-máquinas para Y=200000. O hub substitui essa função enquanto o acesso está
-ativo e restaura a implementação original ao desativar ou encerrar.
-Não há loop reabrindo menus nem hooks globais de propriedades.
+O botão de teste pausa o farm e envia uma única chamada `main / pw8 / 100`.
+O mesmo teste está disponível isoladamente:
 
-O catálogo incorpora 99 posições extraídas de chamadas literais do controlador
-original. Máquinas ocultas com posição conhecida voltam ao local do mapa;
-as demais, quando de tamanho compatível, ficam numa área ao lado do field.
-Portas e barreiras têm uma ação separada para remoção local. Pivôs e displays
-alterados são restaurados ao encerrar. Isso não concede progresso no servidor.
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Spookyz10/gci/main/tests/Collect100.client.luau"))()
+```
 
-## World 1
+Execute o teste isolado com o auto farm desligado. O resultado é impresso no console.
 
-- Grasslands: auto win pelo caminho local `GalaxyGen.EnemyDead()`, conclusão
-  manual e `tempLuck` configurável antes da solicitação de recompensa.
-- Solarians: alocação até o cap em todas as funções, recall, suspensão das
-  condições locais de visibilidade e acesso a Restoration e Souls.
-- Planet Run: coleta de bits pelas posições SpawnPos e solicitação de conclusão
-  com o mínimo de tempo do catálogo da fase atual.
-- Singularity Chart: compra de nós abaixo do cap e com pré-requisitos locais
-  atendidos, descobrindo IDs internamente.
-- Acesso a Planetary, Planetoids, Supernova, Constellation, Dark Matter e demais
-  menus encontrados no PlayerGui. Resets continuam a exigir confirmação nativa.
+## Lojas e mapa
 
-## World 2
+As lojas do place são SurfaceGuis ligadas às máquinas. O hub mantém essa
+estrutura: não transforma lojas em janelas nem muda o parent dos seus widgets.
+Os atalhos focam a câmera na superfície e permitem voltar à câmera anterior.
+Compras usam o upgrade selecionado no jogo ou a SurfaceGui que contém esse upgrade.
 
-- Coleta multifield compartilhada com Geral.
-- Máquinas e interfaces, Temple Chart e atalhos de progressão.
-- Gauntlet: solicitação da maior ou menor sala disponível e acesso às áreas
-  e aos artefatos pelos seletores nativos.
+Mostrar máquinas suspende `TabManager.ShowHideTabs()` de forma reversível e
+usa posições originais mapeadas. Máquinas sem posição confirmada ficam intactas;
+não é criada uma galeria nem terreno adicional. A restauração guarda pivôs de
+modelos e CFrames individuais de peças, incluindo modelos aninhados, além dos
+estados Enabled/Visible alterados. Falhas são informadas e seus registros ficam
+disponíveis para nova tentativa, em vez de serem descartados silenciosamente.
 
-## Verificação e limites
+## Outros recursos
 
-`tests/StudioHarness.luau` recebe uma função que executa o hub com serviços
-simulados. O harness foi executado no Studio com instâncias reais fora do
-DataModel, cobrindo 42 verificações: navegação, dimensões móveis, coleta de
-ambos os worlds, limite de lote, pedidos pendentes, backoff, compras por loja,
-resgates, anti-AFK, tecla K, charts, posições de máquinas, barreiras e limpeza.
-StyLua valida a sintaxe Luau e a formatação de fonte e testes.
+- Daily, hourly e anti-AFK automáticos.
+- Compra máxima do upgrade selecionado e dos upgrades da mesma superfície.
+- Velocidade local, auto win e tempLuck de Grasslands.
+- Solarians, Planet Run, charts e atalhos de World 1 e World 2.
 
-O place aberto é uma exportação sem as implementações originais dos handlers
-do servidor. A análise confirma os protocolos do cliente e os comportamentos
-locais; aceitação de tiers, luck, vitórias, compras, fases e recompensas exige
-teste no jogo com o servidor original. Retorno positivo de coleta não prova
-por si só que uma recompensa foi persistida.
+## Verificação
 
-As evidências originais permanecem em `evidence/`, ignoradas pelo Git. O
-repositório distribui o hub, documentação e testes, sem incluir o place exportado.
+`tests/StudioHarness.luau` foi executado no Studio com 38 verificações. Os
+fixtures usam SurfaceGuis reais com Adornees, modelos aninhados e progresso de
+fields, em vez de representar as lojas como ScreenGuis. O layout dos três modos
+é medido em uma SurfaceGui temporária de 360 × 760 pixels no engine, removida
+ao final. O teste cobre exclusão entre farms, quantidade unitária, preferência
+por Anti, bloqueios com cap positivo, retorno falso, compras, câmera e restauração.
+
+Os remotes e serviços de gameplay são simulados no harness. O arquivo aberto
+no Studio é uma exportação sem os handlers originais do servidor. Isso valida
+o comportamento do cliente; aceitação dos pedidos e ganhos persistentes ainda
+exigem teste contra o servidor original. Retorno positivo não comprova ganho salvo.
+
+O código usa camelCase e PascalCase, sem comentários. As evidências e o place
+exportado permanecem fora do Git.

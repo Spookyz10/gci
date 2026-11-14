@@ -415,6 +415,8 @@ function Game.stats()
 					and math.abs(root.Position.Z - location[4]) < radius
 				then
 					stats.inField = id
+					Hub.confirmedFields = Hub.confirmedFields or {}
+					Hub.confirmedFields[id] = true
 					stats.world = location[1]
 					break
 				end
@@ -428,6 +430,45 @@ function Game.currentWorld()
 	return tonumber(Game.stats().world) or 1
 end
 
+function Game.refreshCompatibilityFields()
+	if Hub.fieldScanAt and os.clock() - Hub.fieldScanAt < 1 then
+		return
+	end
+	Hub.fieldScanAt = os.clock()
+	Hub.confirmedFields = Hub.confirmedFields or {}
+	local fields = Hub.module("Fields").Fields
+	for _, field in pairs(fields) do
+		if field.compatibility then
+			field.counter = 0
+			table.clear(field.objects)
+		end
+	end
+	local grass = workspace:FindFirstChild("GrassObjects")
+	if not grass then
+		return
+	end
+	for _, object in ipairs(grass:GetChildren()) do
+		if object:IsA("BasePart") and object.Transparency < 1 then
+			for id, location in pairs(fieldLocations) do
+				local radius = id == "desert" and 260 or 65
+				if
+					math.abs(object.Position.X - location[2]) < radius
+					and math.abs(object.Position.Y - location[3]) < 35
+					and math.abs(object.Position.Z - location[4]) < radius
+				then
+					local field = fields[id]
+					if field and field.compatibility then
+						field.counter += 1
+						field.objects[object] = true
+						Hub.confirmedFields[id] = true
+					end
+					break
+				end
+			end
+		end
+	end
+end
+
 function Game.releaseVisibility()
 	for _, connection in ipairs(Hub.visibilityConnections) do
 		connection:Disconnect()
@@ -435,6 +476,9 @@ function Game.releaseVisibility()
 	table.clear(Hub.visibilityConnections)
 	Hub.visibilityGuards = nil
 	Hub.machineGuards = nil
+	Hub.surfaceGuards = nil
+	Hub.upgradeWatchers = nil
+	Hub.upgradeEntries = nil
 	Hub.restorePatches()
 end
 
@@ -444,44 +488,210 @@ function Game.keepVisible(object, visible)
 	end
 	Hub.visibilityGuards = Hub.visibilityGuards or {}
 	if Hub.visibilityGuards[object] ~= nil then
+		Hub.visibilityGuards[object].desired = visible
+		Hub.visibilityGuards[object].refresh()
 		return
 	end
-	Hub.visibilityGuards[object] = visible
-	Game.scopedProperty(Hub.mapProperties, object, "Visible", visible)
-	table.insert(
-		Hub.visibilityConnections,
-		object:GetPropertyChangedSignal("Visible"):Connect(function()
-			if Hub.alive and Hub.settings.unlock and object.Visible ~= visible then
-				object.Visible = visible
+	local guard = { desired = visible, busy = false }
+	local function refresh()
+		if guard.busy or not object.Parent or not Hub.alive or not Hub.settings.unlock then
+			return
+		end
+		guard.busy = true
+		local desired = guard.desired
+		if type(desired) == "function" then
+			desired = desired()
+		end
+		if object.Visible ~= desired then
+			object.Visible = desired
+		end
+		guard.busy = false
+	end
+	guard.refresh = refresh
+	Hub.visibilityGuards[object] = guard
+	Game.scopedProperty(Hub.mapProperties, object, "Visible", object.Visible)
+	refresh()
+	table.insert(Hub.visibilityConnections, object:GetPropertyChangedSignal("Visible"):Connect(refresh))
+end
+
+function Game.surfaceList(worldId)
+	local result, seen = {}, {}
+	local models = Game.worldModels(worldId)
+	local root = playerGui:FindFirstChild("W" .. worldId)
+	local function add(surface)
+		if not surface:IsA("SurfaceGui") or seen[surface] then
+			return
+		end
+		seen[surface] = true
+		table.insert(result, surface)
+	end
+	if root then
+		add(root)
+		for _, object in ipairs(root:GetDescendants()) do
+			add(object)
+		end
+	end
+	for _, object in ipairs(playerGui:GetDescendants()) do
+		if object:IsA("SurfaceGui") and object.Adornee then
+			for _, model in ipairs(models) do
+				if object.Adornee:IsDescendantOf(model) then
+					add(object)
+					break
+				end
 			end
-		end)
-	)
+		end
+	end
+	for _, model in ipairs(models) do
+		for _, object in ipairs(model:GetDescendants()) do
+			add(object)
+		end
+	end
+	return result
+end
+
+function Game.showSurface(surface)
+	local locked = surface:FindFirstChild("Locked") or surface:FindFirstChild("Lock")
+	local usable = surface:FindFirstChild("ShopContainer")
+		or surface:FindFirstChild("PrestigeMenu")
+		or surface:FindFirstChild("Unlocked")
+	local lockOnly = (locked and not usable) or surface.Name:lower() == "locked" or surface.Name:lower() == "lock"
+	local enabled = not lockOnly
+	Game.scopedProperty(Hub.mapProperties, surface, "Enabled", enabled)
+	Hub.surfaceGuards = Hub.surfaceGuards or {}
+	if not Hub.surfaceGuards[surface] then
+		Hub.surfaceGuards[surface] = true
+		table.insert(
+			Hub.visibilityConnections,
+			surface:GetPropertyChangedSignal("Enabled"):Connect(function()
+				if Hub.alive and Hub.settings.unlock and not Hub.cameraState and surface.Enabled ~= enabled then
+					surface.Enabled = enabled
+				end
+			end)
+		)
+	end
+	if locked and locked:IsA("GuiObject") then
+		Game.keepVisible(locked, false)
+	end
+	if usable then
+		Game.keepVisible(usable, true)
+	end
+	return enabled
+end
+
+function Game.exposeWidget(object, entry)
+	if
+		typeof(object) ~= "Instance"
+		or not object:IsA("GuiObject")
+		or not object:FindFirstAncestorWhichIsA("SurfaceGui")
+	then
+		return false
+	end
+	Hub.upgradeWatchers = Hub.upgradeWatchers or {}
+	Hub.upgradeEntries = Hub.upgradeEntries or {}
+	if entry then
+		Hub.upgradeEntries[object] = entry
+	end
+	if Hub.upgradeWatchers[object] then
+		Hub.visibilityGuards[object].refresh()
+		return true
+	end
+	Hub.upgradeWatchers[object] = true
+	local variables = object:FindFirstChild("Variables") or object
+	local level = variables:FindFirstChild("Level")
+	local cap = variables:FindFirstChild("LevelCap")
+	local maxed = object:FindFirstChild("MaxedDisplay")
+	local cost = object:FindFirstChild("Cost", true)
+	local function available()
+		local entry = Hub.upgradeEntries[object]
+		local current = entry and tonumber(entry.level)
+		local limit = entry and tonumber(entry.levelCap or entry.maxLevel)
+		if not entry and maxed and maxed:IsA("GuiObject") and maxed.Visible then
+			return false
+		end
+		if
+			not entry
+			and cost
+			and cost:IsA("TextLabel")
+			and cost.Text:gsub("<.->", ""):lower():match("^%s*unlocked%s*$")
+		then
+			return false
+		end
+		if not current and level and level:IsA("ValueBase") then
+			current = tonumber(level.Value)
+		end
+		if not limit and cap and cap:IsA("ValueBase") then
+			limit = tonumber(cap.Value)
+		end
+		if current and limit and limit > 0 then
+			return current < limit
+		end
+		return not (maxed and maxed:IsA("GuiObject") and maxed.Visible)
+	end
+	Game.keepVisible(object, available)
+	local function refresh()
+		local guard = Hub.visibilityGuards and Hub.visibilityGuards[object]
+		if guard then
+			guard.refresh()
+		end
+	end
+	for _, value in ipairs(variables:GetChildren()) do
+		if value:IsA("ValueBase") and (value.Name == "Level" or value.Name == "LevelCap") then
+			table.insert(Hub.visibilityConnections, value.Changed:Connect(refresh))
+		end
+	end
+	if maxed and maxed:IsA("GuiObject") then
+		table.insert(Hub.visibilityConnections, maxed:GetPropertyChangedSignal("Visible"):Connect(refresh))
+	end
+	if cost and cost:IsA("TextLabel") then
+		table.insert(Hub.visibilityConnections, cost:GetPropertyChangedSignal("Text"):Connect(refresh))
+	end
+	local display = object:FindFirstChild("Display")
+	for _, holder in ipairs({ object, display or object }) do
+		for _, child in ipairs(holder:GetChildren()) do
+			if child.Name == "Lock" or child.Name == "Locked" or (holder == display and child.Name == "Unlock") then
+				Game.keepVisible(child, false)
+			elseif
+				child.Name == "Unlocked"
+				or (
+					holder == display
+					and (child.Name == "CostDisplay" or child.Name == "LevelDisplay" or child.Name == "TierDisplay")
+				)
+			then
+				Game.keepVisible(child, true)
+			end
+		end
+	end
+	local parent = object.Parent
+	while parent and not parent:IsA("SurfaceGui") do
+		if parent.Name == "ShopContainer" or parent.Name == "PrestigeMenu" then
+			Game.keepVisible(parent, true)
+		end
+		parent = parent.Parent
+	end
+	return true
 end
 
 function Game.exposeUpgradeObjects(worldId)
 	local count = 0
+	local surfaces, allowed, counted = Game.surfaceList(worldId), {}, {}
+	for _, surface in ipairs(surfaces) do
+		allowed[surface] = Game.showSurface(surface)
+	end
 	local function expose(entry)
 		local object = entry.object or entry.obj
-		if typeof(object) ~= "Instance" or not object:IsDescendantOf(playerGui) then
+		if typeof(object) ~= "Instance" or object:FindFirstAncestorWhichIsA("LuaSourceContainer") then
 			return
 		end
-		local root = playerGui:FindFirstChild("W" .. worldId)
-		if not root or not object:IsDescendantOf(root) then
+		local surface = object:FindFirstAncestorWhichIsA("SurfaceGui")
+		if not surface or not allowed[surface] then
 			return
 		end
-		local parent = object
-		while parent and not parent:IsA("SurfaceGui") do
-			Game.keepVisible(parent, true)
-			parent = parent.Parent
-		end
-		for _, child in ipairs(object:GetChildren()) do
-			if child.Name == "Lock" or child.Name == "Locked" then
-				Game.keepVisible(child, false)
-			elseif child.Name == "Unlocked" then
-				Game.keepVisible(child, true)
+		if Game.exposeWidget(object, entry.level ~= nil and entry or nil) then
+			if not counted[object] then
+				count += 1
 			end
+			counted[object] = true
 		end
-		count += 1
 	end
 	local ok, catalog = pcall(Game.catalog)
 	if ok then
@@ -489,12 +699,15 @@ function Game.exposeUpgradeObjects(worldId)
 			expose(entry)
 		end
 	end
-	if not ok then
-		local root = playerGui:FindFirstChild("W" .. worldId)
-		if root then
-			for _, object in ipairs(root:GetDescendants()) do
-				if object:IsA("GuiObject") and object:FindFirstChild("Identifier") then
-					expose({ object = object })
+	for _, surface in ipairs(surfaces) do
+		for _, object in ipairs(surface:GetDescendants()) do
+			if object.Name == "Identifier" and object:IsA("ValueBase") then
+				local widget = object.Parent
+				if widget.Name == "Variables" then
+					widget = widget.Parent
+				end
+				if widget:IsA("GuiObject") then
+					expose({ object = widget })
 				end
 			end
 		end
@@ -762,7 +975,8 @@ function Game.fieldUnlocked(id, field)
 		return true
 	end
 	if stats.compatibility then
-		return false, "Acesso não confirmado; entre no field para usá-lo"
+		return Hub.confirmedFields and Hub.confirmedFields[id] == true,
+			"Acesso não confirmado por visita ou grama no mapa"
 	end
 	if not stats.slotLoaded and not stats.saveLoaded then
 		return false, "Carregando save"
@@ -819,6 +1033,9 @@ end
 
 function Game.unlockedFields()
 	local result, blocked = {}, {}
+	if Game.stats().compatibility then
+		Game.refreshCompatibilityFields()
+	end
 	for id, field in pairs(Hub.module("Fields").Fields) do
 		if tonumber(field.world) == Game.currentWorld() or tonumber(field.world) == -1 then
 			local ok, unlocked, reason = pcall(Game.fieldUnlocked, id, field)
@@ -933,7 +1150,12 @@ function Game.collectAll()
 	if quantity < 1 then
 		return
 	end
-	Hub.farmMessage = target.id .. " · " .. mode .. " × " .. quantity
+	local fieldName = target.id == "anti" and "Anti Realm" or target.id == "main" and "Normal" or target.id
+	Hub.farmMessage = "Field: " .. fieldName .. " (" .. target.id .. ") · " .. mode .. " × " .. quantity
+	Hub.farmTargets = {}
+	for _, entry in ipairs(unlocked) do
+		table.insert(Hub.farmTargets, entry.id)
+	end
 	Game.requestCut(target.id, mode, quantity)
 end
 
@@ -1088,34 +1310,6 @@ function Game.revealMachines(worldId)
 							end
 						end)
 					)
-				end
-			end
-		end
-	end
-	local root = playerGui:FindFirstChild("W" .. worldId)
-	if root then
-		if root:IsA("LayerCollector") then
-			Game.scopedProperty(Hub.mapProperties, root, "Enabled", true)
-		end
-		for _, surface in ipairs(root:GetChildren()) do
-			local adornee = surface:IsA("SurfaceGui") and surface.Adornee
-			if adornee and adornee.Position.Y < 100000 then
-				Game.scopedProperty(Hub.mapProperties, surface, "Enabled", true)
-				if Hub.compatibility and not Hub.machineGuards[surface] then
-					Hub.machineGuards[surface] = true
-					table.insert(
-						Hub.visibilityConnections,
-						surface:GetPropertyChangedSignal("Enabled"):Connect(function()
-							if Hub.alive and Hub.settings.unlock and Hub.cameraState == nil and not surface.Enabled then
-								surface.Enabled = true
-							end
-						end)
-					)
-				end
-				for _, object in ipairs(surface:GetDescendants()) do
-					if object:IsA("GuiObject") and object.Name == "Locked" then
-						Game.keepVisible(object, false)
-					end
 				end
 			end
 		end
@@ -1671,7 +1865,7 @@ function Ui.refresh()
 			.. " · "
 			.. mode
 			.. "\n"
-			.. (Hub.farmMessage or "Somente fields liberados no world atual")
+			.. (Hub.farmMessage or "Aguardando envio · fields confirmados neste world")
 	end
 	if Ui.requestStats and Ui.requestStats.Parent then
 		Ui.requestStats.Text = Hub.stats.requests
@@ -1680,6 +1874,11 @@ function Ui.refresh()
 			.. " positivos  ·  "
 			.. Hub.stats.rejected
 			.. " recusas/erros"
+			.. "\n"
+			.. (
+				Hub.settings.mode == "pw8" and ("PW8 · fields: " .. table.concat(Hub.farmTargets or {}, ", "))
+				or "Prioridade: anti com grama; senão main"
+			)
 	end
 end
 
@@ -1725,7 +1924,7 @@ Ui.renderers.Geral = function(parent)
 	Ui.farmStatus = Ui.text(farm, "", 14, Theme.muted)
 	Ui.farmStatus.Size = UDim2.new(1, 0, 0, 44)
 	Ui.requestStats = Ui.text(farm, "", 12, Theme.accent)
-	Ui.requestStats.Size = UDim2.new(1, 0, 0, 32)
+	Ui.requestStats.Size = UDim2.new(1, 0, 0, 64)
 	Ui.button(farm, "Teste único: PW8 × 100 em main", Game.testCollect100)
 	local movement = Ui.card(parent, "Velocidade")
 	local speed = Ui.input(movement, "Velocidade", "48")

@@ -37,12 +37,29 @@ return function(runHub)
 	local alternate = make("SurfaceGui", "AutomationUpgrades", w1)
 	alternate.Adornee = part
 	local shop = make("Frame", "ShopContainer", surface)
+	shop.Visible = false
+	local nested = make("Folder", "Nested", w1)
+	local lockedSurface = make("SurfaceGui", "Locked", nested)
+	lockedSurface.Adornee = part
+	make("Frame", "Locked", lockedSurface)
+	local physicalSurface = make("SurfaceGui", "SurfaceGui", part)
+	physicalSurface.Enabled = false
+	local physicalPanel = make("Frame", "PrestigeMenu", physicalSurface)
+	physicalPanel.Visible = false
 	local otherShop = make("Frame", "ShopContainer", alternate)
 	local lock = make("Frame", "Locked", surface)
 	local upgradeA = make("Frame", "UpgradeA", shop)
-	make("StringValue", "Identifier", upgradeA)
+	local upgradeVariables = make("Folder", "Variables", upgradeA)
+	make("StringValue", "Identifier", upgradeVariables)
+	local upgradeLevel = make("IntValue", "Level", upgradeVariables)
+	local upgradeCap = make("IntValue", "LevelCap", upgradeVariables)
+	upgradeCap.Value = 3
 	local upgradeB = make("Frame", "UpgradeB", shop)
 	local upgradeC = make("Frame", "UpgradeC", otherShop)
+	local inactivePage = make("ScrollingFrame", "InactivePage", shop)
+	inactivePage.Visible = false
+	local pageUpgrade = make("Frame", "PageUpgrade", inactivePage)
+	make("StringValue", "Identifier", pageUpgrade)
 	local chartNode = make("Frame", "ChartNode", shop)
 	local chartLock = make("Frame", "Lock", chartNode)
 	local chartUnlocked = make("Frame", "Unlocked", chartNode)
@@ -414,8 +431,21 @@ return function(runHub)
 		upgradeA.Visible = false
 		api.Game.revealMachines(1)
 		modules.TabManager.ShowHideTabs()
+		check(shop.Visible and not lock.Visible, "Surface mostra ShopContainer e oculta painel Locked")
+		check(not inactivePage.Visible, "Revelar upgrades preserva navegação entre páginas da loja")
+		check(not lockedSurface.Enabled, "Surface exclusiva de bloqueio fica desativada")
+		check(physicalSurface.Enabled and physicalPanel.Visible, "Surface dentro da máquina também é revelada")
 		check(nativeCalls == 0, "Controlador nativo suspenso sem inicializar outro módulo")
 		check(upgradeA.Visible, "Upgrade oculto revelado")
+		upgradeLevel.Value = 3
+		task.wait()
+		check(not upgradeA.Visible, "Upgrade no cap fica oculto")
+		upgradeA.Visible = true
+		task.wait()
+		check(not upgradeA.Visible, "Updater não revela upgrade maxed")
+		upgradeLevel.Value = 1
+		task.wait()
+		check(upgradeA.Visible, "Upgrade reaparece ao deixar de estar maxed")
 		check(
 			#chartEntry.prereqs == 0 and chartEntry.unlocked and chartEntry.unlockCondition(),
 			"Chart expõe nós sem pré-requisito local"
@@ -524,6 +554,33 @@ return function(runHub)
 		task.wait()
 		check(part.Position.Y < 100000, "Compatibilidade mantém máquina após ocultação do jogo")
 		check(api.Game.exposeUpgradeObjects(1) > 0, "Compatibilidade revela upgrade pelo Identifier real")
+		local grassFolder = make("Folder", "GrassObjects", root)
+		local antiGrass = make("Part", "g", grassFolder)
+		antiGrass.Position = Vector3.new(-16990, -27, 30)
+		local planetGrass = make("Part", "g", grassFolder)
+		planetGrass.Position = Vector3.new(-617, 5054, 3234)
+		api.Hub.fieldScanAt = nil
+		local detected = api.Game.unlockedFields()
+		check(#detected == 3, "Grama real confirma anti e planet além do campo inicial")
+		api.Hub.settings.collect = true
+		api.Game.setFarmMode("platinum")
+		runCollect()
+		check(
+			cuts[#cuts].field == "anti" and cuts[#cuts].quantity == 1,
+			"Compatibilidade Platinum usa anti com grama detectada"
+		)
+		check(api.Hub.farmMessage:find("Anti Realm", 1, true), "Destino Anti Realm aparece no status")
+		antiGrass:Destroy()
+		api.Hub.fieldScanAt = nil
+		runCollect()
+		check(cuts[#cuts].field == "main", "Compatibilidade volta a main quando anti está vazio")
+		api.Game.setFarmMode("pw8")
+		local sent = {}
+		for _ = 1, 3 do
+			runCollect()
+			sent[cuts[#cuts].field] = true
+		end
+		check(sent.main and sent.anti and sent.planet, "PW8 percorre todos os campos confirmados da sessão")
 		local compatibilityEvents = #events
 		api.Game.claimRewards()
 		check(#events == compatibilityEvents + 2, "Compatibilidade envia claims sem ler timer de outro módulo")

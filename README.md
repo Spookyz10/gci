@@ -67,10 +67,22 @@ O botão de restaurar mapa foi removido. A limpeza ao fechar continua interna.
 O hub consulta tabelas já ativas por getgc, sem requerer módulos novamente no
 jogo publicado. Também aceita tabelas de upvalues e caches do registry.
 Sem acesso a essas APIs, usa compatibilidade para mapa, widgets, farm e rewards.
-Nesse modo, o world é estimado pela posição em World 1/2; o farm confirma apenas
-o campo inicial e o campo ocupado. O cap de referência é 5000, não um cap lido do save.
+Nesse modo, o world é estimado pela posição em World 1/2. O farm confirma o campo
+inicial, campos visitados nesta sessão e campos com grama visível em Workspace.GrassObjects.
+A leitura da grama ocorre no máximo uma vez por segundo. Visitas ficam memorizadas
+até fechar o hub; isso não equivale à leitura completa dos desbloqueios do save.
+O cap de referência é 5000, não um cap lido do save.
 Claims são tentados a cada 10 segundos sem alegar que o timer está pronto.
 As máquinas são mantidas por eventos de CFrame, sem parar o script geral do jogo.
+O detector percorre SurfaceGuis dentro das máquinas e associadas às suas peças,
+inclusive SurfaceGuis aninhadas em PlayerGui. Ativa ShopContainer/PrestigeMenu e
+desativa Lock/Locked, preservando a navegação entre páginas internas das lojas.
+Encontra Identifier tanto direto no widget quanto em Variables.Identifier.
+Widgets no cap ficam ocultos usando dados nativos quando disponíveis ou os
+valores/indicadores locais de Level, LevelCap, MaxedDisplay e Cost. Os eventos
+acompanham mudanças desses indicadores, sem revelar novamente um widget maxed.
+O painel de farm mostra Field: Anti Realm (anti) ou Field: Normal (main), e a lista
+de fields que entram no rodízio PW8. Especiais preferem anti apenas com grama atual.
 Revelar widgets não altera prereqs internos nesse modo. Ações que precisam de
 GalaxyGen, Solarians ou outros módulos continuam indisponíveis sem acesso nativo.
 Para o controlador de mapa, hookfunction também cobre referências da função

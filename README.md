@@ -2,8 +2,35 @@
 
 Interface Luau responsiva para o projeto aberto no Roblox Studio.
 
-Em desenvolvimento. O repositório remoto deverá ser público, conforme solicitado.
-O script distribuível ficará em `src/FroggyzHub.client.luau`.
+Script distribuível: `src/FroggyzHub.client.luau`. Interface responsiva com abas
+Geral, mundos descobertos no catálogo e Misc; botão flutuante para reabrir.
+Right Shift também alterna a janela no computador.
+
+Inclui auto collect com limite de 5000 por pedido a cada 0,2 s mais o tempo de
+resposta do servidor, tier automático pela cadeia `nextTier`, override de tier e
+quantidade, velocidade local, menus de upgrades/resets, compra máxima por ID,
+daily/hourly, auto win local de Grasslands e `tempLuck` configurável.
+O limite de 5000 é o encontrado no cliente, não um máximo aceito pelo servidor.
+Auto win chama `GalaxyGen.EnemyDead()`; recompensa persistente não foi confirmada.
+Menus sobrepostos podem ser restaurados pelo botão próprio ou fechando o hub.
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Spookyz10/gci/main/src/FroggyzHub.client.luau"))()
+```
+
+Esse carregador requer um ambiente com `game:HttpGet` e `loadstring` habilitados.
+Para usar como código do próprio jogo no Studio, copie o conteúdo para um
+LocalScript em StarterPlayerScripts.
+
+## Verificação
+
+- Parser/formatador StyLua 2.6.0 em modo Luau.
+- Construção isolada no Studio, sem inserir a interface no jogo: abas Geral,
+  World 1, World 2, World 8, World 9 e Misc detectadas no catálogo real.
+- Harness com jogador e remote simulados: coleta enviou exatamente
+  `{id="cut", field="main", identifier="top", quantity=120}` com cap 120 e
+  cadeia de três tiers; a interface foi destruída e conexões limpas ao encerrar.
+- Não foi feito teste contra os handlers originais, ausentes nesta exportação.
 
 ## Estado da análise
 
@@ -36,5 +63,6 @@ da economia persistida. As compras e a coleta atuais usam remotes.
 
 ## Entrega
 
-A URL raw e a loadstring só serão registradas depois da publicação e verificação
-do arquivo remoto. Não há URL publicada neste momento.
+Repositório de destino informado pelo usuário: https://github.com/Spookyz10/gci.
+Somente o hub, este documento e `.gitignore` são distribuídos. A pasta de
+evidências permanece local.

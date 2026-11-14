@@ -184,8 +184,10 @@ local general = page("Geral")
 general.Visible = true
 label(
 	general,
-	"Coleta adaptativa usa objetos locais do field selecionado. O servidor pode rejeitar pedidos. Nenhuma confirmação de recompensa é presumida."
+	"Coleta usa o cap do field e o maior tier da cadeia disponível no catálogo local. Quantidade e tier podem ser recusados pelo servidor."
 )
+local tierOverride = input(general, "Tier manual (vazio = maior tier do catálogo)")
+local quantityOverride = input(general, "Quantidade por envio (vazio = cap do field)")
 local collectButton
 collectButton = button(
 	general,
@@ -436,7 +438,7 @@ table.insert(
 )
 task.spawn(function()
 	while alive do
-		task.wait(0.25)
+		task.wait(0.2)
 		if collecting and alive then
 			local ok, err = pcall(function()
 				assert(okFields, "Fields indisponível")
@@ -444,26 +446,32 @@ task.spawn(function()
 				local f = fields[fieldChoice]
 				local stats = module("Data").ImportantData.Stats
 				assert(f.world == stats.world or f.world == -1 or f.world == 0, "Field pertence a outro world")
-				local quantity = 0
-				for object in pairs(f.objects or {}) do
-					if
-						typeof(object) == "Instance"
-						and object.Parent
-						and object.Name == "g"
-						and object.Transparency < 1
-					then
-						quantity += 1
-					end
-				end
-				quantity = math.min(quantity, math.max(0, tonumber(f.max) or 0), 5000)
+				local cap = math.max(0, tonumber(f.max) or 0)
+				local requested = tonumber(quantityOverride.Text) or cap
+				assert(requested == requested and requested >= 0 and requested < math.huge, "Quantidade inválida")
+				local quantity = math.floor(math.min(requested, cap, 5000))
 				if quantity < 1 then
 					report("Aguardando grass no field " .. fieldChoice)
 					return
 				end
-				local identifier = f.defaultId == "tier" and stats.currentTier or f.defaultId
-				if identifier == "tier2" then
-					error("Tier World 2 requer mapeamento; coleta não enviada")
+				local identifier = f.defaultId
+				if identifier == "tier" or identifier == "tier2" then
+					identifier = stats.currentTier
+					local types = module("GrassTypes").Types
+					local visited = {}
+					while types[identifier] and not visited[identifier] do
+						visited[identifier] = true
+						local nextTier = types[identifier].nextTier
+						if not nextTier or not types[nextTier] or types[nextTier].special then
+							break
+						end
+						identifier = nextTier
+					end
 				end
+				if #tierOverride.Text > 0 then
+					identifier = tierOverride.Text
+				end
+				assert(type(identifier) == "string" and #identifier > 0, "Tier indisponível")
 				local remotes = replicatedStorage:FindFirstChild("Remotes")
 				local remote = remotes and remotes:FindFirstChild("GenericFunction")
 				assert(remote and remote:IsA("RemoteFunction"), "GenericFunction indisponível")

@@ -15,7 +15,7 @@ O seletor possui exatamente três modos, mutuamente exclusivos:
 
 | Modo | Identifier | Quantidade | Field |
 | --- | --- | --- | --- |
-| PW8 | `pw8` | Cap do field, até 5000 | Rodízio entre fields liberados do world atual |
+| PW8 | `pw8` | Cap do field, até 5000; 5000 se cap inicial ainda não disponível | Rodízio entre fields liberados do world atual |
 | Platinum | `platinum` | Sempre 1 | Anti liberado com grama; senão main |
 | Moonstone | `moonstone` | Sempre 1 | Anti liberado com grama; senão main |
 
@@ -23,6 +23,9 @@ O tier PW8 é fixo e não depende do tier do jogador. A verificação de progres
 se aplica à liberação dos fields. Cap positivo, sozinho, não libera um field:
 o hub consulta upgrades, resets e condições de acesso encontradas no cliente.
 Quando não consegue confirmar uma área, não envia para ela.
+
+Os campos iniciais main e jungle são reconhecidos pelo world sem depender de
+slotLoaded ou de cap calculado. Valores de world em texto são normalizados.
 
 Platinum e Moonstone usam World 1. Existe no máximo um InvokeServer pendente.
 Trocar de modo espera esse pedido terminar antes de enviar o próximo. PW8 tem
@@ -43,7 +46,7 @@ Execute o teste isolado com o auto farm desligado. O resultado é impresso no co
 As lojas do place são SurfaceGuis ligadas às máquinas. O hub mantém essa
 estrutura: não transforma lojas em janelas nem muda o parent dos seus widgets.
 Os atalhos focam a câmera na superfície e permitem voltar à câmera anterior.
-Compras usam o upgrade selecionado no jogo ou a SurfaceGui que contém esse upgrade.
+As compras continuam pelos botões nativos do jogo. Os botões de compra do hub foram removidos.
 
 Mostrar máquinas suspende `TabManager.ShowHideTabs()` de forma reversível e
 usa posições originais mapeadas. Máquinas sem posição confirmada ficam intactas;
@@ -52,16 +55,22 @@ modelos e CFrames individuais de peças, incluindo modelos aninhados, além dos
 estados Enabled/Visible alterados. Falhas são informadas e seus registros ficam
 disponíveis para nova tentativa, em vez de serem descartados silenciosamente.
 
+O mesmo botão revela objetos de upgrades existentes no catálogo e no PlayerGui.
+Eventos de Visible mantêm esses objetos disponíveis sem loop por frame.
+Os nós do chart recebem prereqs vazios e condições locais liberadas; níveis,
+moedas e progresso do save não são falsificados. Restaurar ou fechar desconecta
+os eventos e devolve condições e estados originais. Isso não comprova aceitação
+de compras pelo servidor nem cria widgets ausentes do cliente.
+
 ## Outros recursos
 
 - Daily, hourly e anti-AFK automáticos.
-- Compra máxima do upgrade selecionado e dos upgrades da mesma superfície.
 - Velocidade local, auto win e tempLuck de Grasslands.
 - Solarians, Planet Run, charts e atalhos de World 1 e World 2.
 
 ## Verificação
 
-`tests/StudioHarness.luau` foi executado no Studio com 38 verificações. Os
+`tests/StudioHarness.luau` cobre regressões de field, visibilidade e restauração. Os
 fixtures usam SurfaceGuis reais com Adornees, modelos aninhados e progresso de
 fields, em vez de representar as lojas como ScreenGuis. O layout dos três modos
 é medido em uma SurfaceGui temporária de 360 × 760 pixels no engine, removida

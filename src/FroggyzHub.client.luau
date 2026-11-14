@@ -24,6 +24,7 @@ local Hub = {
 	mapModels = {},
 	mapProperties = {},
 	focusProperties = {},
+	visibilityConnections = {},
 	settings = { collect = false, mode = "pw8", autoWin = false, autoBits = false, luck = 1000, unlock = false },
 	stats = { requests = 0, accepted = 0, rejected = 0, fields = 0, rewards = 0 },
 	purchaseBusy = false,
@@ -227,6 +228,88 @@ function Game.stats()
 	return Hub.module("Data").ImportantData.Stats
 end
 
+function Game.currentWorld()
+	return tonumber(Game.stats().world) or 1
+end
+
+function Game.releaseVisibility()
+	for _, connection in ipairs(Hub.visibilityConnections) do
+		connection:Disconnect()
+	end
+	table.clear(Hub.visibilityConnections)
+	Hub.visibilityGuards = nil
+	Hub.restorePatches()
+end
+
+function Game.keepVisible(object, visible)
+	if typeof(object) ~= "Instance" or not object:IsA("GuiObject") then
+		return
+	end
+	Hub.visibilityGuards = Hub.visibilityGuards or {}
+	if Hub.visibilityGuards[object] ~= nil then
+		return
+	end
+	Hub.visibilityGuards[object] = visible
+	Game.scopedProperty(Hub.mapProperties, object, "Visible", visible)
+	table.insert(
+		Hub.visibilityConnections,
+		object:GetPropertyChangedSignal("Visible"):Connect(function()
+			if Hub.alive and Hub.settings.unlock and object.Visible ~= visible then
+				object.Visible = visible
+			end
+		end)
+	)
+end
+
+function Game.exposeUpgradeObjects(worldId)
+	local count = 0
+	local function expose(entry)
+		local object = entry.object or entry.obj
+		if typeof(object) ~= "Instance" or not object:IsDescendantOf(playerGui) then
+			return
+		end
+		local root = playerGui:FindFirstChild("W" .. worldId)
+		if not root or not object:IsDescendantOf(root) then
+			return
+		end
+		local parent = object
+		while parent and not parent:IsA("SurfaceGui") do
+			Game.keepVisible(parent, true)
+			parent = parent.Parent
+		end
+		for _, child in ipairs(object:GetChildren()) do
+			if child.Name == "Lock" or child.Name == "Locked" then
+				Game.keepVisible(child, false)
+			elseif child.Name == "Unlocked" then
+				Game.keepVisible(child, true)
+			end
+		end
+		count += 1
+	end
+	local ok, catalog = pcall(Game.catalog)
+	if ok then
+		for _, entry in pairs(catalog) do
+			expose(entry)
+		end
+	end
+	local chartOk, chart = pcall(Hub.module, "SingularityChart")
+	if chartOk then
+		for _, entry in pairs(chart.Upgrades or {}) do
+			if (tonumber(entry.world) or 1) == worldId then
+				Hub.patch(entry, "prereqs", {})
+				Hub.patch(entry, "unlocked", true)
+				if type(entry.unlockCondition) == "function" then
+					Hub.patch(entry, "unlockCondition", function()
+						return true
+					end)
+				end
+				expose(entry)
+			end
+		end
+	end
+	return count
+end
+
 function Game.event(payload)
 	if not Hub.alive then
 		return false
@@ -283,6 +366,7 @@ function Game.nativeVisibility(enabled)
 		Hub.settings.unlock = true
 		return
 	end
+	Game.releaseVisibility()
 	Game.restoreCamera()
 	local restored, failures = Game.restoreMachines()
 	local properties, propertyFailures = Game.restoreScope(Hub.mapProperties)
@@ -453,11 +537,14 @@ end
 
 function Game.fieldUnlocked(id, field)
 	local stats = Game.stats()
-	if not stats.slotLoaded then
-		return false, "Carregando save"
-	end
-	if field.world ~= stats.world and field.world ~= -1 then
+	if tonumber(field.world) ~= Game.currentWorld() and tonumber(field.world) ~= -1 then
 		return false, "Outro world"
+	end
+	if id == "main" or id == "jungle" or stats.inField == id then
+		return true
+	end
+	if not stats.slotLoaded and not stats.saveLoaded then
+		return false, "Carregando save"
 	end
 	if field.unlocked == false or field.locked == true or field.disabled == true then
 		return false, "Bloqueado"
@@ -512,7 +599,7 @@ end
 function Game.unlockedFields()
 	local result, blocked = {}, {}
 	for id, field in pairs(Hub.module("Fields").Fields) do
-		if field.world == Game.stats().world or field.world == -1 then
+		if tonumber(field.world) == Game.currentWorld() or tonumber(field.world) == -1 then
 			local ok, unlocked, reason = pcall(Game.fieldUnlocked, id, field)
 			if ok and unlocked then
 				table.insert(result, { id = id, field = field })
@@ -584,7 +671,11 @@ function Game.collectAll()
 	end
 	local unlocked = Game.unlockedFields()
 	if #unlocked == 0 then
-		Hub.farmMessage = "Nenhum field liberado neste world"
+		local reasons = {}
+		for _, entry in ipairs(Hub.blocked or {}) do
+			table.insert(reasons, entry.id .. ": " .. tostring(entry.reason))
+		end
+		Hub.farmMessage = "World " .. Game.currentWorld() .. " · " .. table.concat(reasons, "; ")
 		return
 	end
 	local mode = Hub.settings.mode
@@ -593,7 +684,7 @@ function Game.collectAll()
 		Hub.fieldCursor = ((Hub.fieldCursor or 0) % #unlocked) + 1
 		target = unlocked[Hub.fieldCursor]
 	else
-		if Game.stats().world ~= 1 then
+		if Game.currentWorld() ~= 1 then
 			Hub.farmMessage = "Platinum e Moonstone usam World 1"
 			return
 		end
@@ -616,7 +707,8 @@ function Game.collectAll()
 		Hub.farmMessage = "Nenhum field válido para este modo"
 		return
 	end
-	local quantity = mode == "pw8" and math.floor(math.min(5000, target.field.max)) or 1
+	local cap = tonumber(target.field.max) or 0
+	local quantity = mode == "pw8" and math.floor(math.min(5000, cap > 0 and cap or 5000)) or 1
 	if quantity < 1 then
 		return
 	end
@@ -775,7 +867,8 @@ function Game.revealMachines(worldId)
 			end
 		end
 	end
-	Ui.notify(moved .. " máquinas reveladas no mapa; " .. skipped .. " sem posição confirmada, mantidas intactas.")
+	local upgrades = Game.exposeUpgradeObjects(worldId)
+	Ui.notify(moved .. " máquinas; " .. upgrades .. " upgrades visíveis; " .. skipped .. " sem posição confirmada.")
 	return moved, skipped
 end
 
@@ -1195,10 +1288,6 @@ function Ui.buildShell()
 	}, Ui.context)
 	Ui.column(Ui.context, 8)
 	Ui.contextTitle = Ui.text(Ui.context, "Superfície no mapa", 14, Theme.accent, true)
-	Ui.button(Ui.context, "Máximo do selecionado", Game.buySelected)
-	Ui.button(Ui.context, "Máximo desta superfície", function()
-		Game.buyShop(Hub.nativeSurface)
-	end)
 	Ui.button(Ui.context, "Voltar à câmera anterior", Game.restoreCamera, true)
 	Ui.resize()
 	Hub.connect(Ui.canvas:GetPropertyChangedSignal("AbsoluteSize"), Ui.resize)
@@ -1383,15 +1472,6 @@ Ui.renderers.Geral = function(parent)
 	Ui.requestStats = Ui.text(farm, "", 12, Theme.accent)
 	Ui.requestStats.Size = UDim2.new(1, 0, 0, 32)
 	Ui.button(farm, "Teste único: PW8 × 100 em main", Game.testCollect100)
-	local purchases = Ui.card(
-		parent,
-		"Upgrade selecionado",
-		"Toque em um upgrade na SurfaceGui do jogo. Os botões usam essa seleção."
-	)
-	Ui.button(purchases, "Comprar máximo do selecionado", Game.buySelected)
-	Ui.button(purchases, "Comprar máximo dessa superfície", function()
-		Game.buyShop()
-	end)
 	local map = Ui.card(parent, "Restaurar", "Desfaz peças, superfícies e regras locais alteradas pelo hub.")
 	Ui.button(map, "Restaurar mapa e câmera", function()
 		Game.nativeVisibility(false)
@@ -1447,10 +1527,6 @@ Ui.renderers["World 1"] = function(parent)
 		Ui.notify(Game.collectBits() .. " bits solicitados.")
 	end)
 	Ui.button(run, "Solicitar conclusão da fase", Game.finishRun)
-	local chart = Ui.card(parent, "Chart")
-	Ui.button(chart, "Comprar nós disponíveis de World 1", function()
-		Game.chartBuy(1)
-	end)
 end
 
 Ui.renderers["World 2"] = function(parent)
@@ -1464,10 +1540,6 @@ Ui.renderers["World 2"] = function(parent)
 		{ "Gauntlet", "Gauntlet" },
 		{ "Artefatos", "Artifacts" },
 	})
-	local chart = Ui.card(parent, "Temple Chart")
-	Ui.button(chart, "Comprar nós disponíveis", function()
-		Game.chartBuy(2)
-	end)
 	local gauntlet = Ui.card(parent, "Gauntlet")
 	Ui.button(gauntlet, "Maior sala disponível", function()
 		Game.event({ id = "gauntletRoomMax", increase = true })
@@ -1517,7 +1589,7 @@ function Hub.shutdown()
 	for _, message in ipairs(propertyErrors) do
 		table.insert(failures, message)
 	end
-	Hub.restorePatches()
+	Game.releaseVisibility()
 	local _, generalErrors = Game.restoreScope(Hub.properties)
 	for _, message in ipairs(generalErrors) do
 		table.insert(failures, message)

@@ -42,6 +42,16 @@ return function(runHub)
 	local upgradeA = make("Frame", "UpgradeA", shop)
 	local upgradeB = make("Frame", "UpgradeB", shop)
 	local upgradeC = make("Frame", "UpgradeC", otherShop)
+	local chartNode = make("Frame", "ChartNode", shop)
+	local chartLock = make("Frame", "Lock", chartNode)
+	local chartUnlocked = make("Frame", "Unlocked", chartNode)
+	chartUnlocked.Visible = false
+	local chartPrereqs = { "previous" }
+	local chartCondition = function()
+		return false
+	end
+	local chartEntry =
+		{ world = 1, obj = chartNode, prereqs = chartPrereqs, unlocked = false, unlockCondition = chartCondition }
 	local signals = {}
 	for _, name in ipairs({ "Heartbeat", "Idled", "InputBegan", "InputChanged", "InputEnded" }) do
 		signals[name] = make("BindableEvent", name, root)
@@ -95,7 +105,7 @@ return function(runHub)
 		Upgrades = { Basic = { a = { object = upgradeA }, b = { object = upgradeB }, c = { object = upgradeC } } },
 		Solarians = { Bars = { sol = {} } },
 		PlanetRun = { BitsCreated = {}, Levels = { normal = { levels = { ["1"] = { minTime = 20000 } } } } },
-		SingularityChart = { Upgrades = {} },
+		SingularityChart = { Upgrades = { node = chartEntry } },
 		GalaxyGen = { CombatState = { fighting = false, playerStats = { tempLuck = 0 } } },
 	}
 	local cuts, events, active, maxActive, idleCalls = {}, {}, 0, 0, 0
@@ -257,6 +267,14 @@ return function(runHub)
 		check(api.Ui.window.Visible ~= before, "Atalho K")
 		local unlocked = api.Game.unlockedFields()
 		check(#unlocked == 1 and unlocked[1].id == "main", "Cap positivo não libera fields bloqueados")
+		stats.world = "1"
+		stats.slotLoaded = false
+		fields.main.max = 0
+		check(api.Game.fieldUnlocked("main", fields.main), "Main independe de cap e flag de save")
+		check(api.Game.unlockedFields()[1].id == "main", "World numérico em texto reconhecido")
+		stats.world = 1
+		stats.slotLoaded = true
+		fields.main.max = 120
 		api.Hub.settings.collect = true
 		api.Game.setFarmMode("pw8")
 		runCollect()
@@ -319,7 +337,17 @@ return function(runHub)
 			events[#events].upgradeId == "b" and events[#events - 1].upgradeId == "a",
 			"Compra pela SurfaceGui da seleção"
 		)
+		upgradeA.Visible = false
 		api.Game.revealMachines(1)
+		check(upgradeA.Visible, "Upgrade oculto revelado")
+		check(
+			#chartEntry.prereqs == 0 and chartEntry.unlocked and chartEntry.unlockCondition(),
+			"Chart expõe nós sem pré-requisito local"
+		)
+		check(not chartLock.Visible and chartUnlocked.Visible, "Chart usa botão nativo desbloqueado")
+		upgradeA.Visible = false
+		task.wait()
+		check(upgradeA.Visible, "Atualização de visibilidade corrigida por evento")
 		check(
 			(automation:GetPivot().Position - api.Game.machinePositions[1].AutomationShop.Position).Magnitude < 0.1,
 			"Máquina na posição original conhecida"
@@ -342,6 +370,18 @@ return function(runHub)
 		api.Game.removeBarriers(1)
 		check(door:GetPivot().Position.Y > 100000, "Barreira aninhada ocultada")
 		api.Game.nativeVisibility(false)
+		check(
+			chartEntry.prereqs == chartPrereqs
+				and not chartEntry.unlocked
+				and chartEntry.unlockCondition == chartCondition,
+			"Condições originais do chart restauradas"
+		)
+		check(chartLock.Visible and not chartUnlocked.Visible, "Widgets do chart restaurados")
+		check(not upgradeA.Visible, "Visibilidade original do upgrade restaurada")
+		upgradeA.Visible = true
+		upgradeA.Visible = false
+		task.wait()
+		check(not upgradeA.Visible, "Controlador de visibilidade desconectado ao restaurar")
 		check(
 			part.CFrame == partOriginal and doorPart.CFrame == doorOriginal,
 			"Peças de modelos aninhados restauradas exatamente"

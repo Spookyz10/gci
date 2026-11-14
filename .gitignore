@@ -1,0 +1,6 @@
+evidence/
+.env
+.env.*
+*.rbxl
+*.rbxlx
+*.log
